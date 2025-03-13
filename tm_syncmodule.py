@@ -33,7 +33,7 @@ POLL_INTERVAL_SEC = 1.0
 MIN_DB_WRITE_INTERVAL_SEC = 60
 NO_RESPONSE_THRESHOLD_SEC = 300
 TELEGRAM_HEADER = "ТМ. Стенд"
-FLASK_HOST = "127.0.0.1"
+FLASK_HOST_KEY = "127.0.0.1"
 FLASK_PORT = 5555
 
 # Параметр DEVICE_SIDE будет передаваться через аргумент командной строки
@@ -117,6 +117,30 @@ print(f"[INFO] SERIAL_PORT установлен в {SERIAL_PORT}")
 
 # Загрузка конфигурации из JSON файла
 load_config_from_json("config.json")
+
+#####################################################
+# ФУНКЦИЯ: получаем новый ключ из Flask
+#####################################################
+def get_new_key_from_web():
+    """
+    Обращаемся к маршруту /api/new_key,
+    чтобы сгенерировать новый ключ в Flask
+    и вернуть его сюда.
+    """
+    url = f"http://{FLASK_HOST_KEY}:{FLASK_PORT}/api/new_key"
+    try:
+        resp = requests.get(url, timeout=3)
+        if resp.status_code == 200:
+            data = resp.json()
+            return data.get("key")
+        else:
+            print(f"[ERROR] /api/new_key вернул статус {resp.status_code}")
+            return None
+    except Exception as e:
+        print(f"[ERROR] Не удалось получить новый ключ: {e}")
+        return None
+
+
 
 #####################################################
 # СОЕДИНЕНИЕ С БД + ВЫБОРКА HVCell
