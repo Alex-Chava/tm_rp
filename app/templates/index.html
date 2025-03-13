@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Мнемосхема</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+</head>
+<body>
+    <div class="schema">
+        {% for cell_number, params in cells.items() %}
+            {% if cell_number == 0 %}
+                <!-- Пустая ячейка -->
+                <div class="cell-container empty-cell"></div>
+            {% else %}
+                <div class="cell-container">
+                    <!-- 1. Номер ячейки -->
+                    <div class="cell-number">{{ cell_number }}</div>
+
+                    <!-- 2. Название ячейки -->
+                    <div class="cell-name">{{ params[0].cell_name }}</div>
+
+                    <!-- 3. Ключ управления местное -->
+                    {% set local_control = params | selectattr('parameter_description', 'equalto', 'Ключ управления местное') | first %}
+                    {% if local_control %}
+                        {% set local_norm = (local_control.value == local_control.display_state) %}
+                        {% if local_norm %}
+                            <img class="image" src="{{ url_for('static', filename='images/nnnn1.png') }}" alt="Key Image">
+                        {% else %}
+                            <img class="image" src="{{ url_for('static', filename='images/nnnn0.png') }}" alt="Key Image">
+                        {% endif %}
+                    {% endif %}
+
+                    <!-- 4. Картинка тележки -->
+                    {% set switch_on = params | selectattr('parameter_description', 'equalto', 'Выключатель включен') | first %}
+                    {% if switch_on %}
+                        {% set switch_on_norm = (switch_on.value == switch_on.display_state) %}
+                        {% set switch_on_val = '1' if switch_on_norm else '0' %}
+                    {% else %}
+                        {% set switch_on_val = '0' %}
+                    {% endif %}
+
+                    {% set switch_off = params | selectattr('parameter_description', 'equalto', 'Выключатель отключен') | first %}
+                    {% if switch_off %}
+                        {% set switch_off_norm = (switch_off.value == switch_off.display_state) %}
+                        {% set switch_off_val = '1' if switch_off_norm else '0' %}
+                    {% else %}
+                        {% set switch_off_val = '0' %}
+                    {% endif %}
+
+                    {% set cart_position = params | selectattr('parameter_description', 'equalto', 'Тележка в рабочем положении') | first %}
+                    {% if cart_position %}
+                        {% set cart_position_norm = (cart_position.value == cart_position.display_state) %}
+                        {% set cart_position_val = '1' if cart_position_norm else '0' %}
+                    {% else %}
+                        {% set cart_position_val = '0' %}
+                    {% endif %}
+
+                    <img class="image"
+                         src="{{ url_for('static', filename='images/' ~ switch_on_val ~ switch_off_val ~ 'n' ~ cart_position_val ~ 'n.png') }}"
+                         alt="Cart Image">
+
+                    <!-- 5. Картинка заземляющих ножей -->
+                    {% set grounding_knives = params | selectattr('parameter_description', 'equalto', 'Включены заземляющие ножи') | first %}
+                    {% if grounding_knives %}
+                        {% set gk_norm = (grounding_knives.value == grounding_knives.display_state) %}
+                        {% if gk_norm %}
+                            <img class="image" src="{{ url_for('static', filename='images/nn1nn.png') }}" alt="Grounding Image">
+                        {% else %}
+                            <img class="image" src="{{ url_for('static', filename='images/nn0nn.png') }}" alt="Grounding Image">
+                        {% endif %}
+                    {% endif %}
+
+                    <!-- 6. Дата "Выключатель включен", если старше 5 минут -->
+                    {% if switch_on and switch_on.value_date %}
+                        {% if switch_on.value_date < now_minus_5 %}
+                            {% set formatted_date = switch_on.value_date.strftime('%d.%m.%Y %H:%M') %}
+                            <div class="red-date">{{ formatted_date }}</div>
+                        {% endif %}
+                    {% endif %}
+
+                    <!-- 7. Тексты остальных параметров (только если param.display_state == param.value) -->
+                    {% for param in params %}
+                        {% if param.parameter_description not in [
+                            'Выключатель включен',
+                            'Выключатель отключен',
+                            'Тележка в рабочем положении',
+                            'Ключ управления местное',
+                            'Включены заземляющие ножи',
+                            'резерв'
+                        ] and param.display_state != param.value %}
+                            <div class="param-text">{{ param.display_text }}</div>
+                        {% endif %}
+                    {% endfor %}
+                </div>
+            {% endif %}
+        {% endfor %}
+    </div>
+</body>
+</html>

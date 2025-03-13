@@ -1,0 +1,12 @@
+[Unit]
+Description=tm Sync Module 3
+After=network.target
+
+[Service]
+User=root
+WorkingDirectory=/home/tm
+Environment=/home/tm/venv/bin
+ExecStart=/home/tm/venv/bin/python sync_module_3.py
+
+[Install]
+WantedBy=multi-user.target

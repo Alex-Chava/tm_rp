@@ -1,0 +1,90 @@
+/* Сброс базовых отступов и стилизация body */
+html, body {
+    margin: 0;
+    padding: 0;
+    background-color: rgb(80, 80, 80);
+    color: #fff;
+    font-family: Arial, sans-serif;
+    box-sizing: border-box;
+}
+
+/* Применяем box-sizing ко всем элементам */
+*, *::before, *::after {
+    box-sizing: inherit;
+}
+
+/* Контейнер для мнемосхемы */
+.schema {
+    display: flex;
+    /* Запрещаем перенос на новую строку */
+    flex-wrap: nowrap;
+    /* Горизонтальная прокрутка, если ширины экрана не хватает */
+    overflow-x: auto;
+    /* Скрываем вертикальную прокрутку, чтобы она не появлялась без надобности */
+    overflow-y: hidden;
+    width: 100%;
+    padding: 10px;
+}
+
+/* Ячейка с ограничениями по ширине */
+.cell-container {
+    /*
+       flex: 1 1 0 позволяет им распределять доступное место,
+       при этом min-width / max-width ограничивают итоговую ширину.
+    */
+    flex: 1 1 0;
+    min-width: 100px;  /* Минимальная ширина, например, 200px */
+    max-width: 300px;  /* Максимальная ширина, например, 300px */
+
+    /* Вертикальные отступы между ячейками */
+    margin-right: 10px;
+
+    /* Визуальные настройки */
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    background-color: rgb(80, 80, 80);
+    /* Если нужно, чтобы содержимое ячейки не «распирало» высоту при большом тексте: */
+    /* overflow: hidden; */
+    /* height: 400px; или auto по желанию */
+}
+
+/* Изображения внутри ячеек */
+.image {
+    max-width: 100%;
+    height: auto;
+    object-fit: contain;
+    margin-bottom: 0px;
+}
+
+/* Текстовые элементы внутри ячеек */
+.cell-number,
+.cell-name,
+.param-text {
+    text-align: center;
+    font-weight: bold;
+    margin: 5px 0;
+    word-wrap: break-word; /* Перенос по словам, если текст длинный */
+}
+/* Базовый размер: на средних/больших экранах */
+.cell-number,
+.cell-name,
+.param-text,
+.red-date {
+    font-size: 16px;
+}
+
+/* На очень узких экранах (до 480px шириной) уменьшаем шрифт */
+@media (max-width: 1500px) {
+  .cell-number,
+  .cell-name,
+  .param-text,
+  .red-date {
+    font-size: 12px;
+  }
+}
+
+.red-date {
+    color: red;
+    font-weight: bold;
+}
