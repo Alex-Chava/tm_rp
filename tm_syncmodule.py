@@ -16,7 +16,10 @@ from collections import defaultdict
 #####################################################
 # НАСТРОЙКИ
 #####################################################
-
+# ANSI escape-коды для цветов
+COLOR_RESET = "\033[0m"  # Сброс цвета
+COLOR_GREEN = "\033[32m"  # Зеленый цвет
+COLOR_RED = "\033[31m"
 # Значения по умолчанию
 DB_URL = "sqlite:///database.db"
 SERIAL_BAUDRATE = 115200
@@ -86,23 +89,23 @@ def load_config_from_json(file_path):
         FLASK_PORT = config.get("FLASK_PORT", FLASK_PORT)
 
         # Выводим значения всех полей с комментариями, выровненными по столбцам
-        print("[INFO] КОНФИГУРАЦИЯ ЗАГРУЖЕНА. Значения полей:")
-        print(f"  - {'SERIAL_BAUDRATE:'.ljust(25)} {str(config.get('SERIAL_BAUDRATE')).ljust(15)} (Скорость передачи данных для последовательного порта)")
-        print(f"  - {'MQTT_BROKER:'.ljust(25)} {str(config.get('MQTT_BROKER')).ljust(15)} (Адрес MQTT-брокера)")
-        print(f"  - {'MQTT_PORT:'.ljust(25)} {str(config.get('MQTT_PORT')).ljust(15)} (Порт MQTT-брокера)")
-        print(f"  - {'MQTT_TOPIC:'.ljust(25)} {str(config.get('MQTT_TOPIC')).ljust(15)} (Топик MQTT для публикации сообщений)")
-        print(f"  - {'TELEGRAM_TOKEN:'.ljust(25)} {str(config.get('TELEGRAM_TOKEN')).ljust(15)} (Токен для доступа к Telegram Bot API)")
-        print(f"  - {'TELEGRAM_CHAT_ID:'.ljust(25)} {str(config.get('TELEGRAM_CHAT_ID')).ljust(15)} (ID чата в Telegram для отправки сообщений)")
-        print(f"  - {'DEVICE_NAME:'.ljust(25)} {str(config.get('DEVICE_NAME')).ljust(15)} (Название устройства)")
-        print(f"  - {'DEVICE_SERIAL:'.ljust(25)} {str(config.get('DEVICE_SERIAL')).ljust(15)} (Серийный номер устройства)")
-        print(f"  - {'DEVICE_FW:'.ljust(25)} {str(config.get('DEVICE_FW')).ljust(15)} (Версия прошивки устройства)")
-        print(f"  - {'DEVICE_TYPE:'.ljust(25)} {str(config.get('DEVICE_TYPE')).ljust(15)} (Тип устройства)")
-        print(f"  - {'POLL_INTERVAL_SEC:'.ljust(25)} {str(config.get('POLL_INTERVAL_SEC')).ljust(15)} (Интервал опроса устройств в секундах)")
-        print(f"  - {'MIN_DB_WRITE_INTERVAL_SEC:'.ljust(25)} {str(config.get('MIN_DB_WRITE_INTERVAL_SEC')).ljust(15)} (Минимальный интервал записи в базу данных в секундах)")
-        print(f"  - {'NO_RESPONSE_THRESHOLD_SEC:'.ljust(25)} {str(config.get('NO_RESPONSE_THRESHOLD_SEC')).ljust(15)} (Порог времени без ответа от устройства в секундах)")
-        print(f"  - {'TELEGRAM_HEADER:'.ljust(25)} {str(config.get('TELEGRAM_HEADER')).ljust(15)} (Заголовок для сообщений в Telegram)")
-        print(f"  - {'FLASK_HOST:'.ljust(25)} {str(config.get('FLASK_HOST')).ljust(15)} (Адрес Flask-приложения)")
-        print(f"  - {'FLASK_PORT:'.ljust(25)} {str(config.get('FLASK_PORT')).ljust(15)} (Порт Flask-приложения)")
+        print("{COLOR_RED}[INFO] КОНФИГУРАЦИЯ ЗАГРУЖЕНА. Значения полей:")
+        print(f"  - {'SERIAL_BAUDRATE'.ljust(25)} {COLOR_GREEN}{str(config.get('SERIAL_BAUDRATE')).ljust(15)}{COLOR_RESET} (Скорость передачи данных для последовательного порта)")
+        print(f"  - {'MQTT_BROKER'.ljust(25)} {COLOR_GREEN}{str(config.get('MQTT_BROKER')).ljust(15)}{COLOR_RESET} (Адрес MQTT-брокера)")
+        print(f"  - {'MQTT_PORT'.ljust(25)} {COLOR_GREEN}{str(config.get('MQTT_PORT')).ljust(15)}{COLOR_RESET} (Порт MQTT-брокера)")
+        print(f"  - {'MQTT_TOPIC'.ljust(25)} {COLOR_GREEN}{str(config.get('MQTT_TOPIC')).ljust(15)}{COLOR_RESET} (Топик MQTT для публикации сообщений)")
+        print(f"  - {'TELEGRAM_TOKEN'.ljust(25)} {COLOR_GREEN}{str(config.get('TELEGRAM_TOKEN')).ljust(15)}{COLOR_RESET} (Токен для доступа к Telegram Bot API)")
+        print(f"  - {'TELEGRAM_CHAT_ID'.ljust(25)} {COLOR_GREEN}{str(config.get('TELEGRAM_CHAT_ID')).ljust(15)}{COLOR_RESET} (ID чата в Telegram для отправки сообщений)")
+        print(f"  - {'DEVICE_NAME'.ljust(25)} {COLOR_GREEN}{str(config.get('DEVICE_NAME')).ljust(15)}{COLOR_RESET} (Название устройства)")
+        print(f"  - {'DEVICE_SERIAL'.ljust(25)} {COLOR_GREEN}{str(config.get('DEVICE_SERIAL')).ljust(15)}{COLOR_RESET} (Серийный номер устройства)")
+        print(f"  - {'DEVICE_FW'.ljust(25)} {COLOR_GREEN}{str(config.get('DEVICE_FW')).ljust(15)}{COLOR_RESET} (Версия прошивки устройства)")
+        print(f"  - {'DEVICE_TYPE'.ljust(25)} {COLOR_GREEN}{str(config.get('DEVICE_TYPE')).ljust(15)}{COLOR_RESET} (Тип устройства)")
+        print(f"  - {'POLL_INTERVAL_SEC'.ljust(25)} {COLOR_GREEN}{str(config.get('POLL_INTERVAL_SEC')).ljust(15)}{COLOR_RESET} (Интервал опроса устройств в секундах)")
+        print(f"  - {'MIN_DB_WRITE_INTERVAL_SEC'.ljust(25)} {COLOR_GREEN}{str(config.get('MIN_DB_WRITE_INTERVAL_SEC')).ljust(15)}{COLOR_RESET} (Минимальный интервал записи в базу данных в секундах)")
+        print(f"  - {'NO_RESPONSE_THRESHOLD_SEC'.ljust(25)} {COLOR_GREEN}{str(config.get('NO_RESPONSE_THRESHOLD_SEC')).ljust(15)}{COLOR_RESET} (Порог времени без ответа от устройства в секундах)")
+        print(f"  - {'TELEGRAM_HEADER'.ljust(25)} {COLOR_GREEN}{str(config.get('TELEGRAM_HEADER')).ljust(15)}{COLOR_RESET} (Заголовок для сообщений в Telegram)")
+        print(f"  - {'FLASK_HOST'.ljust(25)} {COLOR_GREEN}{str(config.get('FLASK_HOST')).ljust(15)}{COLOR_RESET} (Адрес Flask-приложения)")
+        print(f"  - {'FLASK_PORT'.ljust(25)} {COLOR_GREEN}{str(config.get('FLASK_PORT')).ljust(15)}{COLOR_RESET} (Порт Flask-приложения)")
     except Exception as e:
         print(f"[ERROR] Ошибка при загрузке конфигурации из JSON файла: {e}")
 
