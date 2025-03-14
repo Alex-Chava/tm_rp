@@ -5,7 +5,7 @@ After=network.target
 [Service]
 User=root
 WorkingDirectory=/home/tm_rp
-ExecStart=/home/tm_rp/python3 tm_syncmodule.py -s %I
+ExecStart=python3 /home/tm_rp/tm_syncmodule.py -s %I
 
 [Install]
 WantedBy=multi-user.target
