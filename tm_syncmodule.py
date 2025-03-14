@@ -86,6 +86,22 @@ def load_config_from_json(file_path):
         FLASK_PORT = config.get("FLASK_PORT", FLASK_PORT)
 
         print("[INFO] Конфигурация загружена из JSON файла.")
+        print(f"  - SERIAL_BAUDRATE: {config.get('SERIAL_BAUDRATE')} (Скорость передачи данных для последовательного порта)")
+        print(f"  - MQTT_BROKER: {config.get('MQTT_BROKER')} (Адрес MQTT-брокера)")
+        print(f"  - MQTT_PORT: {config.get('MQTT_PORT')} (Порт MQTT-брокера)")
+        print(f"  - MQTT_TOPIC: {config.get('MQTT_TOPIC')} (Топик MQTT для публикации сообщений)")
+        print(f"  - TELEGRAM_TOKEN: {config.get('TELEGRAM_TOKEN')} (Токен для доступа к Telegram Bot API)")
+        print(f"  - TELEGRAM_CHAT_ID: {config.get('TELEGRAM_CHAT_ID')} (ID чата в Telegram для отправки сообщений)")
+        print(f"  - DEVICE_NAME: {config.get('DEVICE_NAME')} (Название устройства)")
+        print(f"  - DEVICE_SERIAL: {config.get('DEVICE_SERIAL')} (Серийный номер устройства)")
+        print(f"  - DEVICE_FW: {config.get('DEVICE_FW')} (Версия прошивки устройства)")
+        print(f"  - DEVICE_TYPE: {config.get('DEVICE_TYPE')} (Тип устройства)")
+        print(f"  - POLL_INTERVAL_SEC: {config.get('POLL_INTERVAL_SEC')} (Интервал опроса устройств в секундах)")
+        print(f"  - MIN_DB_WRITE_INTERVAL_SEC: {config.get('MIN_DB_WRITE_INTERVAL_SEC')} (Минимальный интервал записи в базу данных в секундах)")
+        print(f"  - NO_RESPONSE_THRESHOLD_SEC: {config.get('NO_RESPONSE_THRESHOLD_SEC')} (Порог времени без ответа от устройства в секундах)")
+        print(f"  - TELEGRAM_HEADER: {config.get('TELEGRAM_HEADER')} (Заголовок для сообщений в Telegram)")
+        print(f"  - FLASK_HOST: {config.get('FLASK_HOST')} (Адрес Flask-приложения)")
+        print(f"  - FLASK_PORT: {config.get('FLASK_PORT')} (Порт Flask-приложения)")
     except Exception as e:
         print(f"[ERROR] Ошибка при загрузке конфигурации из JSON файла: {e}")
 
