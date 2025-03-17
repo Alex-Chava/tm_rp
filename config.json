@@ -12,7 +12,7 @@
     "POLL_INTERVAL_SEC": 1.0,
     "MIN_DB_WRITE_INTERVAL_SEC": 60,
     "NO_RESPONSE_THRESHOLD_SEC": 300,
-    "TELEGRAM_HEADER": "ТМ. Привет с большого бодуна",
-    "FLASK_HOST": "192.168.202.11",
+    "TELEGRAM_HEADER": "ТМ. Тест с 3-й рев.",
+    "FLASK_HOST": "192.168.202.100",
     "FLASK_PORT": 5555
 }
