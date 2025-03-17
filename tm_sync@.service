@@ -1,11 +1,12 @@
 [Unit]
-Description=tm Sync Module side %I
+Description=tm_rp Sync Module side %I
 After=network.target
 
 [Service]
 User=root
 WorkingDirectory=/home/tm_rp
-ExecStart=python3 /home/tm_rp/tm_syncmodule.py -s %I
+Environment=/home/tm_rp/venv/bin
+ExecStart=/home/tm_rp/venv/bin/python3 /home/tm_rp/tm_syncmodule.py -s %I
 
 [Install]
 WantedBy=multi-user.target

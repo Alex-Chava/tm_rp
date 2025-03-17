@@ -1,12 +1,12 @@
 [Unit]
-Description=tm Web Application
+Description=tm_rp Web
 After=network.target
 
 [Service]
 User=root
 WorkingDirectory=/home/tm_rp
-ExecStart=waitress-serve --listen=0.0.0.0:5555 app_instance:app
+Environment=/home/tm_rp/venv/bin
+ExecStart=/home/tm_rp/venv/bin/waitress-serve --listen=0.0.0.0:5555 app_instance:app
 
 [Install]
 WantedBy=multi-user.target
-
