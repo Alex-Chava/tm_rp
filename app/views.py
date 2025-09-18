@@ -4,7 +4,7 @@ from flask import Blueprint, render_template
 from datetime import datetime, timedelta
 
 from .database import db_session
-from .models import HVCell
+from .models import HVCell, AskueData
 
 main = Blueprint('main', __name__)
 
@@ -25,7 +25,11 @@ def index():
         # Но пока складываем «как есть»
         cells_dict[cn].append(cell)
 
-    return render_template('index.html', cells=cells_dict, now_minus_5=now_minus_5)
+    askue_rows = db_session.query(AskueData).all()
+    askue_data = {row.cell_number: row for row in askue_rows}
+
+    return render_template('index.html', cells=cells_dict, now_minus_5=now_minus_5, timedelta=timedelta, askue_data=askue_data)
+
 
 from flask import current_app, jsonify
 import secrets
