@@ -30,7 +30,7 @@ UM_LOGIN = "admin"
 UM_PASSWORD = "admin"
 
 # IP адрес устройства (УМ-31)
-UM_IP = "127.0.0.1"
+UM_IP = "192.168.0.1"
 
 # Период опроса, секунд (раз в минуту)
 POLL_INTERVAL_SEC = 60
