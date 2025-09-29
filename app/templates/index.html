@@ -97,16 +97,16 @@
                         {% set outdated = ask.last_update < (now_minus_5 - timedelta(minutes=15)) %}
                         <div class="askue-block">
                             <div class="askue-line" style="text-align: center; font-weight: bold;">
-                                {{ ask.meter_serial }}
+                                ПУ №-{{ ask.meter_serial }}
                             </div>
                             <div class="askue-line" style="text-align: center; font-weight: bold; color: yellow;">
-                                {{ (ask.UA * ask.ktn)|round(1) }} В
+                                {{ ((ask.UA * ask.ktn) / 1000) |round(1) }} кВ
                             </div>
                             <div class="askue-line" style="text-align: center; font-weight: bold; color: limegreen;">
-                                {{ (ask.UB * ask.ktn)|round(1) }} В
+                                {{ ((ask.UB * ask.ktn) / 1000)|round(1) }} кВ
                             </div>
                             <div class="askue-line" style="text-align: center; font-weight: bold; color: red;">
-                                {{ (ask.UC * ask.ktn)|round(1) }} В
+                                {{ ((ask.UC * ask.ktn) / 1000)|round(1) }} кВ
                             </div>
                             <div class="askue-line" style="text-align: center; font-weight: bold; color: yellow;">
                                 {{ (ask.IA * ask.ktt)|round(2) }} А
@@ -118,10 +118,10 @@
                                 {{ (ask.IC * ask.ktt)|round(2) }} А
                             </div>
                             <div class="askue-line" style="text-align: center; font-weight: bold;">
-                                {{ (ask.PC * ask.ktt * ask.ktn)|round(2) }} кВт
+                                {{ ((ask.PC * ask.ktt * ask.ktn) / 1000) |round(2) }} кВт
                             </div>
                             <div class="askue-line" style="text-align: center; font-weight: bold;">
-                                {{ (ask.QC * ask.ktt * ask.ktn)|round(2) }} квар
+                                {{ ((ask.QC * ask.ktt * ask.ktn) / 1000) |round(2) }} квар
                             </div>
                             <div class="askue-line" style="text-align: center; font-weight: bold; {% if outdated %}color:red;{% endif %}">
                                 {{ ask.last_update.strftime('%d.%m %H:%M') }}

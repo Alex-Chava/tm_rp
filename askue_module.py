@@ -26,8 +26,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Параметры авторизации
-UM_LOGIN = "admin"
-UM_PASSWORD = "admin"
+UM_LOGIN = "SamoletTM"
+UM_PASSWORD = "QhV8GyML"
 
 # IP адрес устройства (УМ-31)
 UM_IP = "192.168.0.1"
