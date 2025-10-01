@@ -87,16 +87,30 @@ def askue_read_data(ip, sessionid):
     )
     cookies = {"sessionid": sessionid}
     logger.info(payload)
-
     try:
-        resp = requests.post(url, data=payload, cookies=cookies)
+        resp = requests.post(url, data=payload, cookies=cookies, timeout=30)
         if resp.status_code == 200:
             return resp.json()
         logger.error("Ошибка чтения данных: код %s", resp.status_code)
         return None
+    except requests.exceptions.Timeout:
+        logger.error("Таймаут соединения: сервер не ответил в течение 30 секунд")
+        return None
+    except requests.exceptions.ConnectionError:
+        logger.error("Ошибка соединения: невозможно подключиться к серверу")
+        return None
     except Exception as e:
         logger.error("Исключение при чтении данных: %s", e)
         return None
+#    try:
+#        resp = requests.post(url, data=payload, cookies=cookies)
+#        if resp.status_code == 200:
+#            return resp.json()
+#        logger.error("Ошибка чтения данных: код %s", resp.status_code)
+#        return None
+#    except Exception as e:
+#        logger.error("Исключение при чтении данных: %s", e)
+#        return None
 
 ##############################################################################
 # Вспомогательная функция для преобразования ISO8601 строки в datetime
