@@ -38,26 +38,58 @@ POLL_INTERVAL_SEC = 60
 ##############################################################################
 # Функция авторизации на УМ-31
 ##############################################################################
-def askue_auth(ip):
+#def askue_auth(ip):
+#    """
+#    Авторизация на УМ-31 по указанному IP.
+#    Отправляет POST запрос на /auth с payload '{"login":"admin","password":"admin"}'.
+#    Возвращает sessionid при успехе или None.
+#    """
+#    url = f"http://{ip}/auth"
+#    payload = '{"login":"%s","password":"%s"}' % (UM_LOGIN, UM_PASSWORD)
+#    try:
+#        resp = requests.post(url, data=payload)
+#        if resp.status_code == 200:
+#            sessionid = resp.cookies.get("sessionid")
+#            if sessionid:
+#                return sessionid
+#        logger.error("Ошибка авторизации, код ответа: %s", resp.status_code)
+#        return None
+#    except Exception as e:
+#        logger.error("Исключение при авторизации: %s", e)
+#        return None
+def askue_auth(ip, retries=3, delay=5):
     """
-    Авторизация на УМ-31 по указанному IP.
-    Отправляет POST запрос на /auth с payload '{"login":"admin","password":"admin"}'.
-    Возвращает sessionid при успехе или None.
+    Авторизация на УМ-31 с повторными попытками и сбросом соединения.
     """
     url = f"http://{ip}/auth"
     payload = '{"login":"%s","password":"%s"}' % (UM_LOGIN, UM_PASSWORD)
-    try:
-        resp = requests.post(url, data=payload)
-        if resp.status_code == 200:
-            sessionid = resp.cookies.get("sessionid")
-            if sessionid:
-                return sessionid
-        logger.error("Ошибка авторизации, код ответа: %s", resp.status_code)
-        return None
-    except Exception as e:
-        logger.error("Исключение при авторизации: %s", e)
-        return None
 
+    for attempt in range(retries):
+        try:
+            # Создаем новую сессию для каждой попытки
+            with requests.Session() as session:
+                headers = {'Connection': 'close'}
+                resp = session.post(url, data=payload, headers=headers, timeout=10)
+
+                if resp.status_code == 200:
+                    sessionid = resp.cookies.get("sessionid")
+                    if sessionid:
+                        logger.info("Успешная авторизация на %s (попытка %d)", ip, attempt + 1)
+                        return sessionid
+
+                logger.warning("Ошибка авторизации на %s, код: %s (попытка %d)",
+                               ip, resp.status_code, attempt + 1)
+
+        except Exception as e:
+            logger.warning("Исключение при авторизации на %s: %s (попытка %d)",
+                           ip, e, attempt + 1)
+
+        # Пауза перед повторной попыткой (кроме последней)
+        if attempt < retries - 1:
+            time.sleep(delay)
+
+    logger.error("Не удалось авторизоваться на %s после %d попыток", ip, retries)
+    return None
 ##############################################################################
 # Функция запроса данных с УМ-31
 ##############################################################################
@@ -88,7 +120,7 @@ def askue_read_data(ip, sessionid):
     cookies = {"sessionid": sessionid}
     logger.info(payload)
     try:
-        resp = requests.post(url, data=payload, cookies=cookies, timeout=30)
+        resp = requests.post(url, data=payload, cookies=cookies, timeout=5)
         if resp.status_code == 200:
             return resp.json()
         logger.error("Ошибка чтения данных: код %s", resp.status_code)
