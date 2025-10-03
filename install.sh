@@ -34,4 +34,66 @@ find ./test -type f -exec chmod +x {} \;
 echo "Предоставление прав на выполнение для всех .sh файлов..."
 find /home/tm_rp -name "*.sh" -type f -exec chmod +x {} \;
 
+# Создание сервисного файла
+echo "Создание сервисного файла..."
+sudo tee /etc/systemd/system/tm_web.service > /dev/null <<EOF
+[Unit]
+Description=tm_rp Web
+After=network.target
+
+[Service]
+User=root
+WorkingDirectory=/home/tm_rp
+Environment=PATH=/home/tm_rp/venv/bin:\$PATH
+ExecStart=/home/tm_rp/venv/bin/waitress-serve --listen=0.0.0.0:5555 app_instance:app
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+echo "Сервисный файл создан: /etc/systemd/system/tm_web.service"
+
+# Создание сервисного файла
+echo "Создание сервисного файла..."
+sudo tee /etc/systemd/system/tm_sync@.service > /dev/null <<EOF
+[Unit]
+Description=tm_rp Sync Module side %I
+After=network.target
+
+[Service]
+User=root
+WorkingDirectory=/home/tm_rp
+Environment=PATH=/home/tm_rp/venv/bin:$PATH
+ExecStart=/home/tm_rp/venv/bin/python3 /home/tm_rp/tm_syncmodule.py -s %I
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+echo "Сервисный файл создан: /etc/systemd/system/tm_sync@.service"
+
+# Создание сервисного файла
+echo "Создание сервисного файла..."
+sudo tee /etc/systemd/system/tm_askue.service > /dev/null <<EOF
+[Unit]
+Description=tm_rp ASKUE
+After=network.target
+
+[Service]
+User=root
+WorkingDirectory=/home/tm_rp
+Environment=PATH=/home/tm_rp/venv/bin:$PATH
+ExecStart=/home/tm_rp/venv/bin/python3 /home/tm_rp/askue_module.py
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+echo "Сервисный файл создан: /etc/systemd/system/tm_askue.service"
+
+sudo systemctl enable tm_web.service
+sudo systemctl enable tm_sync@1.service
+sudo systemctl enable tm_sync@2.service
+sudo systemctl enable tm_askue.service
+
 echo "Установка завершена!"
