@@ -1,4 +1,7 @@
 # Сохранить текущие версии файлов
+# Остановить ТМ
+
+./stop_tm.sh
 cp config.json config.json.backup
 cp database.db database.db.backup
 
