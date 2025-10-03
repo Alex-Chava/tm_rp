@@ -91,6 +91,10 @@ EOF
 
 echo "Сервисный файл создан: /etc/systemd/system/tm_askue.service"
 
+# Перезагрузка systemd и включение сервиса
+echo "Перезагрузка systemd демона и включение сервисов..."
+sudo systemctl daemon-reload
+
 sudo systemctl enable tm_web.service
 sudo systemctl enable tm_sync@1.service
 sudo systemctl enable tm_sync@2.service
