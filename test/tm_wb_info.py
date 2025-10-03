@@ -32,14 +32,17 @@ def create_modbus_request(unit_id: int, function_code: int, start_address: int, 
     return req
 
 
-def send_modbus_request(ser: serial.Serial, request: bytes) -> bytes:
+def send_modbus_request(ser: serial.Serial, request: bytes, use_echo: bool = True) -> bytes:
     """
     Отправка Modbus запроса и чтение ответа
     """
     ser.write(request)
-    # Если есть эхо, читаем его:
-    echo = ser.read(len(request))  # игнорируем эхо
-    time.sleep(0.02)
+
+    # Если есть эхо, читаем его
+    if use_echo:
+        echo = ser.read(len(request))  # читаем эхо
+        time.sleep(0.02)
+
     response = ser.read(256)
     return response
 
@@ -79,14 +82,15 @@ def parse_modbus_response(response: bytes) -> Optional[List[int]]:
     return None
 
 
-def read_string_from_registers(ser: serial.Serial, unit_id: int, start_address: int, num_registers: int) -> Optional[
+def read_string_from_registers(ser: serial.Serial, unit_id: int, start_address: int, num_registers: int,
+                               use_echo: bool = True) -> Optional[
     str]:
     """
     Чтение строки из регистров (точно как в app.py)
     """
     try:
         request = create_modbus_request(unit_id, 0x03, start_address, num_registers)
-        response = send_modbus_request(ser, request)
+        response = send_modbus_request(ser, request, use_echo)
 
         if len(response) == 0:
             return None
@@ -114,13 +118,14 @@ def read_string_from_registers(ser: serial.Serial, unit_id: int, start_address: 
         return None
 
 
-def read_u32_from_registers(ser: serial.Serial, unit_id: int, start_address: int) -> Optional[int]:
+def read_u32_from_registers(ser: serial.Serial, unit_id: int, start_address: int, use_echo: bool = True) -> Optional[
+    int]:
     """
     Чтение 32-битного числа (u32) из двух регистров (точно как в app.py)
     """
     try:
         request = create_modbus_request(unit_id, 0x03, start_address, 2)
-        response = send_modbus_request(ser, request)
+        response = send_modbus_request(ser, request, use_echo)
 
         if len(response) == 0:
             return None
@@ -139,13 +144,13 @@ def read_u32_from_registers(ser: serial.Serial, unit_id: int, start_address: int
         return None
 
 
-def read_u16_from_register(ser: serial.Serial, unit_id: int, address: int) -> Optional[int]:
+def read_u16_from_register(ser: serial.Serial, unit_id: int, address: int, use_echo: bool = True) -> Optional[int]:
     """
     Чтение 16-битного числа (u16) из одного регистра
     """
     try:
         request = create_modbus_request(unit_id, 0x03, address, 1)
-        response = send_modbus_request(ser, request)
+        response = send_modbus_request(ser, request, use_echo)
 
         if len(response) == 0:
             return None
@@ -162,7 +167,7 @@ def read_u16_from_register(ser: serial.Serial, unit_id: int, address: int) -> Op
         return None
 
 
-def read_wb_mio_info(ser: serial.Serial, unit_id: int) -> dict:
+def read_wb_mio_info(ser: serial.Serial, unit_id: int, use_echo: bool = True) -> dict:
     """
     Чтение информации об устройстве WB-MIO с использованием адресов из app.py
     """
@@ -174,18 +179,18 @@ def read_wb_mio_info(ser: serial.Serial, unit_id: int) -> dict:
     }
 
     # Модель устройства - адрес 200, 10 регистров (строка)
-    info['model'] = read_string_from_registers(ser, unit_id, 200, 10)
+    info['model'] = read_string_from_registers(ser, unit_id, 200, 10, use_echo)
 
     # Версия прошивки - адрес 250, 10 регистров (строка)
-    info['firmware'] = read_string_from_registers(ser, unit_id, 250, 10)
+    info['firmware'] = read_string_from_registers(ser, unit_id, 250, 10, use_echo)
 
     # Серийный номер - адрес 270, 2 регистра (u32)
-    serial_u32 = read_u32_from_registers(ser, unit_id, 270)
+    serial_u32 = read_u32_from_registers(ser, unit_id, 270, use_echo)
     if serial_u32:
         info['serial'] = str(serial_u32)  # Преобразуем в строку
 
     # Напряжение - адрес 121, 1 регистр (u16)
-    voltage_raw = read_u16_from_register(ser, unit_id, 121)
+    voltage_raw = read_u16_from_register(ser, unit_id, 121, use_echo)
     if voltage_raw:
         info['voltage'] = f"{voltage_raw / 1000:.2f} V"  # Форматируем как в app.py
 
@@ -243,13 +248,18 @@ def main():
     parser = argparse.ArgumentParser(description='Опрос устройств WB-MIO')
     parser.add_argument('--baudrate', '-b', type=int, default=115200,
                         help='Скорость обмена (по умолчанию: 115200)')
+    parser.add_argument('--no-echo', action='store_true',
+                        help='Работать без эха (по умолчанию: с эхом)')
     args = parser.parse_args()
 
     db_path = 'database.db'
     db_url = f'sqlite:///{db_path}'
 
+    use_echo = not args.no_echo  # Инвертируем, так как флаг называется "no-echo"
+
     print("=== Программа опроса устройств WB-MIO ===")
     print(f"Параметры связи: {args.baudrate} 8N1")
+    print(f"Режим работы: {'с эхом' if use_echo else 'без эха'}")
     print("Адреса регистров из app.py:")
     print("  Модель: 200, Прошивка: 250, Серийный: 270, Напряжение: 121")
     print("=" * 50)
@@ -272,7 +282,8 @@ def main():
     results = []
 
     for com_port, unit_ids in devices_by_com.items():
-        print(f"\n--- Опрос устройств на порту {com_port} (скорость: {args.baudrate}) ---")
+        print(
+            f"\n--- Опрос устройств на порту {com_port} (скорость: {args.baudrate}, режим: {'с эхом' if use_echo else 'без эха'}) ---")
 
         ser = setup_serial_port(com_port, args.baudrate)
         if not ser:
@@ -283,7 +294,7 @@ def main():
             for unit_id in unit_ids:
                 print(f"\nОпрашиваем устройство ID {unit_id}:")
 
-                device_info = read_wb_mio_info(ser, unit_id)
+                device_info = read_wb_mio_info(ser, unit_id, use_echo)
 
                 # Формируем строку с результатами
                 model = device_info['model'] or "не прочитана"
