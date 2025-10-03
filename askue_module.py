@@ -126,7 +126,7 @@ def askue_read_data(ip, sessionid):
         logger.error("Ошибка чтения данных: код %s", resp.status_code)
         return None
     except requests.exceptions.Timeout:
-        logger.error("Таймаут соединения: сервер не ответил в течение 30 секунд")
+        logger.error("Таймаут соединения: сервер не ответил в течение 5 секунд")
         return None
     except requests.exceptions.ConnectionError:
         logger.error("Ошибка соединения: невозможно подключиться к серверу")
