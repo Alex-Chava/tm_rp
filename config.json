@@ -13,6 +13,6 @@
     "MIN_DB_WRITE_INTERVAL_SEC": 60,
     "NO_RESPONSE_THRESHOLD_SEC": 300,
     "TELEGRAM_HEADER": "ТМ. Тест с 3-й рев. + АСКУЭ",
-    "FLASK_HOST": "192.168.0.2",
+    "FLASK_HOST": "192.168.0.1",
     "FLASK_PORT": 5555
 }
