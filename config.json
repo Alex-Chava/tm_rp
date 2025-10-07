@@ -15,7 +15,7 @@
     "TELEGRAM_HEADER": "ТМ. Тест с 3-й рев. + АСКУЭ",
     "FLASK_HOST": "192.168.0.1",
     "FLASK_PORT": 5555,
-    "ASKUE_IP": "192.168.0.1",
-    "ASKUE_INTERVAL_MIN": 20,
-    "ASKUE_POLL_SEC": 60
+    "UM_IP": "192.168.0.1",
+    "UM_INTERVAL_MIN": 20,
+    "UM_POLL_SEC": 60
 }

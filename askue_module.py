@@ -15,7 +15,7 @@ import requests
 import json
 import os
 from datetime import datetime, timedelta
-from sqlalchemy import func
+#from sqlalchemy import func
 from app.database import db_session, init_db
 from app.models import AskueData
 import logging
@@ -40,9 +40,9 @@ def get_askue_config():
             config = json.load(f)
 
         return {
-            "UM_IP": config.get("ASKUE_IP", "192.168.0.1"),
-            "UM_INTERVAL_MIN": config.get("ASKUE_INTERVAL_MIN", 20),
-            "UM_POLL_SEC": config.get("ASKUE_POLL_SEC", 60)
+            "UM_IP": config.get("UM_IP", "192.168.0.1"),
+            "UM_INTERVAL_MIN": config.get("UM_INTERVAL_MIN", 20),
+            "UM_POLL_SEC": config.get("UM_POLL_SEC", 60)
         }
     except Exception as e:
         logger.error("Ошибка чтения config.json: %s. Используются значения по умолчанию.", e)
