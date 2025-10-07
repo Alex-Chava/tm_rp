@@ -15,7 +15,7 @@ import requests
 import json
 import os
 from datetime import datetime, timedelta
-#from sqlalchemy import func
+# from sqlalchemy import func
 from app.database import db_session, init_db
 from app.models import AskueData
 import logging
@@ -35,14 +35,28 @@ UM_PASSWORD = "QhV8GyML"
 def get_askue_config():
     """Чтение параметров АСКУЭ из config.json"""
     try:
-        config_path = os.path.join(os.path.dirname(__file__), '..', 'config.json')
-        with open(config_path, 'r') as f:
+        # config.json находится в той же директории, что и этот скрипт
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        config_path = os.path.join(script_dir, 'config.json')
+
+        logger.info("Попытка чтения config.json по пути: %s", config_path)
+
+        with open(config_path, 'r', encoding='utf-8') as f:
             config = json.load(f)
+
+        logger.info("Конфигурация успешно загружена из %s", config_path)
 
         return {
             "UM_IP": config.get("UM_IP", "192.168.0.1"),
             "UM_INTERVAL_MIN": config.get("UM_INTERVAL_MIN", 20),
             "UM_POLL_SEC": config.get("UM_POLL_SEC", 60)
+        }
+    except FileNotFoundError:
+        logger.error("Файл config.json не найден. Используются значения по умолчанию.")
+        return {
+            "UM_IP": "192.168.0.1",
+            "UM_INTERVAL_MIN": 20,
+            "UM_POLL_SEC": 60
         }
     except Exception as e:
         logger.error("Ошибка чтения config.json: %s. Используются значения по умолчанию.", e)
