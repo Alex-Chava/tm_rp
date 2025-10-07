@@ -12,6 +12,8 @@ askue_module.py
 
 import time
 import requests
+import json
+import os
 from datetime import datetime, timedelta
 from sqlalchemy import func
 from app.database import db_session, init_db
@@ -29,34 +31,36 @@ logger = logging.getLogger(__name__)
 UM_LOGIN = "SamoletTM"
 UM_PASSWORD = "QhV8GyML"
 
-# IP адрес устройства (УМ-31)
-UM_IP = "192.168.0.1"
+# Чтение параметров из config.json
+def get_askue_config():
+    """Чтение параметров АСКУЭ из config.json"""
+    try:
+        config_path = os.path.join(os.path.dirname(__file__), '..', 'config.json')
+        with open(config_path, 'r') as f:
+            config = json.load(f)
 
-# Период опроса, секунд (раз в минуту)
-POLL_INTERVAL_SEC = 60
+        return {
+            "UM_IP": config.get("ASKUE_IP", "192.168.0.1"),
+            "UM_INTERVAL_MIN": config.get("ASKUE_INTERVAL_MIN", 20),
+            "UM_POLL_SEC": config.get("ASKUE_POLL_SEC", 60)
+        }
+    except Exception as e:
+        logger.error("Ошибка чтения config.json: %s. Используются значения по умолчанию.", e)
+        return {
+            "UM_IP": "192.168.0.1",
+            "UM_INTERVAL_MIN": 20,
+            "UM_POLL_SEC": 60
+        }
+
+# Загружаем конфигурацию
+config = get_askue_config()
+UM_IP = config["UM_IP"]
+UM_INTERVAL_MIN = config["UM_INTERVAL_MIN"]
+UM_POLL_SEC = config["UM_POLL_SEC"]
 
 ##############################################################################
 # Функция авторизации на УМ-31
 ##############################################################################
-#def askue_auth(ip):
-#    """
-#    Авторизация на УМ-31 по указанному IP.
-#    Отправляет POST запрос на /auth с payload '{"login":"admin","password":"admin"}'.
-#    Возвращает sessionid при успехе или None.
-#    """
-#    url = f"http://{ip}/auth"
-#    payload = '{"login":"%s","password":"%s"}' % (UM_LOGIN, UM_PASSWORD)
-#    try:
-#        resp = requests.post(url, data=payload)
-#        if resp.status_code == 200:
-#            sessionid = resp.cookies.get("sessionid")
-#            if sessionid:
-#                return sessionid
-#        logger.error("Ошибка авторизации, код ответа: %s", resp.status_code)
-#        return None
-#    except Exception as e:
-#        logger.error("Исключение при авторизации: %s", e)
-#        return None
 def askue_auth(ip, retries=3, delay=5):
     """
     Авторизация на УМ-31 с повторными попытками и сбросом соединения.
@@ -90,6 +94,7 @@ def askue_auth(ip, retries=3, delay=5):
 
     logger.error("Не удалось авторизоваться на %s после %d попыток", ip, retries)
     return None
+
 ##############################################################################
 # Функция запроса данных с УМ-31
 ##############################################################################
@@ -106,7 +111,7 @@ def askue_read_data(ip, sessionid):
     # Рассчитываем временной интервал: от текущего момента до +10 минут.
     now = datetime.now()
     end_time = now.isoformat()
-    start_time = (now - timedelta(minutes=20)).isoformat()
+    start_time = (now - timedelta(minutes=UM_INTERVAL_MIN)).isoformat()
     time_str = f'[{{"start":"{start_time}","end":"{end_time}"}}]'
 
     payload = (
@@ -134,15 +139,6 @@ def askue_read_data(ip, sessionid):
     except Exception as e:
         logger.error("Исключение при чтении данных: %s", e)
         return None
-#    try:
-#        resp = requests.post(url, data=payload, cookies=cookies)
-#        if resp.status_code == 200:
-#            return resp.json()
-#        logger.error("Ошибка чтения данных: код %s", resp.status_code)
-#        return None
-#    except Exception as e:
-#        logger.error("Исключение при чтении данных: %s", e)
-#        return None
 
 ##############################################################################
 # Вспомогательная функция для преобразования ISO8601 строки в datetime
@@ -314,13 +310,15 @@ def askue_poll(ip=UM_IP):
         logger.info("Данные устройства обновлены (meter_serial=%s).", p.get("device_serial", "N/A"))
 
 ##############################################################################
-# Основной цикл опроса (раз в POLL_INTERVAL_SEC)
+# Основной цикл опроса (раз в UM_POLL_SEC)
 ##############################################################################
 def main():
     logger.info("Запуск модуля АСКУЭ...")
+    logger.info("Конфигурация: IP=%s, INTERVAL=%d мин, POLL=%d сек",
+                UM_IP, UM_INTERVAL_MIN, UM_POLL_SEC)
     while True:
         askue_poll()
-        time.sleep(POLL_INTERVAL_SEC)
+        time.sleep(UM_POLL_SEC)
 
 if __name__ == "__main__":
     main()
