@@ -1,4 +1,4 @@
-import argparse  # Добавляем модуль для обработки аргументов командной строки
+import argparse
 import time
 import json
 import struct
@@ -12,24 +12,28 @@ from sqlalchemy.orm import sessionmaker
 from app.models import HVCell
 
 from collections import defaultdict
+from queue import Queue
 
 #####################################################
 # НАСТРОЙКИ
 #####################################################
 # ANSI escape-коды для цветов
-COLOR_RESET = "\033[0m"  # Сброс цвета
-COLOR_GREEN = "\033[32m"  # Зеленый цвет
+COLOR_RESET = "\033[0m"
+COLOR_GREEN = "\033[32m"
 COLOR_BLUE = "\033[36m"
+
 # Значения по умолчанию
 DB_URL = "sqlite:///database.db"
 SERIAL_BAUDRATE = 115200
 MQTT_BROKER = "mqtt.umxx.ru"
 MQTT_PORT = 1883
 MQTT_TOPIC = "sp"
+MQTT_QOS = 1  # Добавляем QoS для надежности
+MQTT_KEEPALIVE = 60
 TELEGRAM_TOKEN = "7276598964:AAG3mw9i7Ybt2PSyYBpwhElGU9F3IC7ZF2s"
 TELEGRAM_CHAT_ID = "-4650871809"
 DEVICE_NAME = "SIM-TM"
-DEVICE_SERIAL = "300000000100"
+DEVICE_SERIAL = "200000891619"
 DEVICE_FW = "v25.0.0"
 DEVICE_TYPE = 42
 POLL_INTERVAL_SEC = 1.0
@@ -41,18 +45,25 @@ FLASK_HOST_KEY = "127.0.0.1"
 FLASK_PORT = 5555
 
 # Параметр DEVICE_SIDE будет передаваться через аргумент командной строки
-DEVICE_SIDE = None  # Инициализируем как None, значение будет установлено позже
+DEVICE_SIDE = None
 
 # SERIAL_PORT будет формироваться динамически на основе аргумента -s
-SERIAL_PORT = None  # Инициализируем как None, значение будет установлено позже
+SERIAL_PORT = None
 
-# новые константы для стабильности подключений mqtt и СОМ
-is_mqtt_connected = False
-serial_port = None  # будет хранить объект `serial.Serial`, если открылся
-last_com_error_telegram_time = None
-last_mqtt_error_telegram_time = None
+# Глобальные переменные для MQTT
 mqtt_client = None
 is_mqtt_connected = False
+mqtt_reconnect_attempts = 0
+MAX_MQTT_RECONNECT_ATTEMPTS = 5
+MQTT_RECONNECT_DELAY = 5  # секунды
+
+# Очередь для неотправленных сообщений
+mqtt_message_queue = Queue()
+
+# Глобальные переменные для COM порта
+serial_port = None
+last_com_error_telegram_time = None
+last_mqtt_error_telegram_time = None
 
 
 #####################################################
@@ -90,22 +101,38 @@ def load_config_from_json(file_path):
 
         # Выводим значения всех полей с комментариями, выровненными по столбцам
         print(f"[INFO]КОНФИГУРАЦИЯ ЗАГРУЖЕНА. Значения полей:")
-        print(f"{COLOR_BLUE}{'SERIAL_BAUDRATE'.ljust(25)} {COLOR_GREEN}{str(config.get('SERIAL_BAUDRATE')).ljust(15)}{COLOR_RESET} (Скорость передачи данных для последовательного порта)")
-        print(f"{COLOR_BLUE}{'MQTT_BROKER'.ljust(25)} {COLOR_GREEN}{str(config.get('MQTT_BROKER')).ljust(15)}{COLOR_RESET} (Адрес MQTT-брокера)")
-        print(f"{COLOR_BLUE}{'MQTT_PORT'.ljust(25)} {COLOR_GREEN}{str(config.get('MQTT_PORT')).ljust(15)}{COLOR_RESET} (Порт MQTT-брокера)")
-        print(f"{COLOR_BLUE}{'MQTT_TOPIC'.ljust(25)} {COLOR_GREEN}{str(config.get('MQTT_TOPIC')).ljust(15)}{COLOR_RESET} (Топик MQTT для публикации сообщений)")
-        print(f"{COLOR_BLUE}{'TELEGRAM_TOKEN'.ljust(25)} {COLOR_GREEN}{str(config.get('TELEGRAM_TOKEN')).ljust(15)}{COLOR_RESET} (Токен для доступа к Telegram Bot API)")
-        print(f"{COLOR_BLUE}{'TELEGRAM_CHAT_ID'.ljust(25)} {COLOR_GREEN}{str(config.get('TELEGRAM_CHAT_ID')).ljust(15)}{COLOR_RESET} (ID чата в Telegram для отправки сообщений)")
-        print(f"{COLOR_BLUE}{'DEVICE_NAME'.ljust(25)} {COLOR_GREEN}{str(config.get('DEVICE_NAME')).ljust(15)}{COLOR_RESET} (Название устройства)")
-        print(f"{COLOR_BLUE}{'DEVICE_SERIAL'.ljust(25)} {COLOR_GREEN}{str(config.get('DEVICE_SERIAL')).ljust(15)}{COLOR_RESET} (Серийный номер устройства)")
-        print(f"{COLOR_BLUE}{'DEVICE_FW'.ljust(25)} {COLOR_GREEN}{str(config.get('DEVICE_FW')).ljust(15)}{COLOR_RESET} (Версия прошивки устройства)")
-        print(f"{COLOR_BLUE}{'DEVICE_TYPE'.ljust(25)} {COLOR_GREEN}{str(config.get('DEVICE_TYPE')).ljust(15)}{COLOR_RESET} (Тип устройства)")
-        print(f"{COLOR_BLUE}{'POLL_INTERVAL_SEC'.ljust(25)} {COLOR_GREEN}{str(config.get('POLL_INTERVAL_SEC')).ljust(15)}{COLOR_RESET} (Интервал опроса устройств в секундах)")
-        print(f"{COLOR_BLUE}{'MIN_DB_WRITE_INTERVAL_SEC'.ljust(25)} {COLOR_GREEN}{str(config.get('MIN_DB_WRITE_INTERVAL_SEC')).ljust(15)}{COLOR_RESET} (Минимальный интервал записи в базу данных в секундах)")
-        print(f"{COLOR_BLUE}{'NO_RESPONSE_THRESHOLD_SEC'.ljust(25)} {COLOR_GREEN}{str(config.get('NO_RESPONSE_THRESHOLD_SEC')).ljust(15)}{COLOR_RESET} (Порог времени без ответа от устройства в секундах)")
-        print(f"{COLOR_BLUE}{'TELEGRAM_HEADER'.ljust(25)} {COLOR_GREEN}{str(config.get('TELEGRAM_HEADER')).ljust(15)}{COLOR_RESET} (Заголовок для сообщений в Telegram)")
-        print(f"{COLOR_BLUE}{'FLASK_HOST'.ljust(25)} {COLOR_GREEN}{str(config.get('FLASK_HOST')).ljust(15)}{COLOR_RESET} (Адрес Flask-приложения)")
-        print(f"{COLOR_BLUE}{'FLASK_PORT'.ljust(25)} {COLOR_GREEN}{str(config.get('FLASK_PORT')).ljust(15)}{COLOR_RESET} (Порт Flask-приложения)")
+        print(
+            f"{COLOR_BLUE}{'SERIAL_BAUDRATE'.ljust(25)} {COLOR_GREEN}{str(config.get('SERIAL_BAUDRATE')).ljust(15)}{COLOR_RESET} (Скорость передачи данных для последовательного порта)")
+        print(
+            f"{COLOR_BLUE}{'MQTT_BROKER'.ljust(25)} {COLOR_GREEN}{str(config.get('MQTT_BROKER')).ljust(15)}{COLOR_RESET} (Адрес MQTT-брокера)")
+        print(
+            f"{COLOR_BLUE}{'MQTT_PORT'.ljust(25)} {COLOR_GREEN}{str(config.get('MQTT_PORT')).ljust(15)}{COLOR_RESET} (Порт MQTT-брокера)")
+        print(
+            f"{COLOR_BLUE}{'MQTT_TOPIC'.ljust(25)} {COLOR_GREEN}{str(config.get('MQTT_TOPIC')).ljust(15)}{COLOR_RESET} (Топик MQTT для публикации сообщений)")
+        print(
+            f"{COLOR_BLUE}{'TELEGRAM_TOKEN'.ljust(25)} {COLOR_GREEN}{str(config.get('TELEGRAM_TOKEN')).ljust(15)}{COLOR_RESET} (Токен для доступа к Telegram Bot API)")
+        print(
+            f"{COLOR_BLUE}{'TELEGRAM_CHAT_ID'.ljust(25)} {COLOR_GREEN}{str(config.get('TELEGRAM_CHAT_ID')).ljust(15)}{COLOR_RESET} (ID чата в Telegram для отправки сообщений)")
+        print(
+            f"{COLOR_BLUE}{'DEVICE_NAME'.ljust(25)} {COLOR_GREEN}{str(config.get('DEVICE_NAME')).ljust(15)}{COLOR_RESET} (Название устройства)")
+        print(
+            f"{COLOR_BLUE}{'DEVICE_SERIAL'.ljust(25)} {COLOR_GREEN}{str(config.get('DEVICE_SERIAL')).ljust(15)}{COLOR_RESET} (Серийный номер устройства)")
+        print(
+            f"{COLOR_BLUE}{'DEVICE_FW'.ljust(25)} {COLOR_GREEN}{str(config.get('DEVICE_FW')).ljust(15)}{COLOR_RESET} (Версия прошивки устройства)")
+        print(
+            f"{COLOR_BLUE}{'DEVICE_TYPE'.ljust(25)} {COLOR_GREEN}{str(config.get('DEVICE_TYPE')).ljust(15)}{COLOR_RESET} (Тип устройства)")
+        print(
+            f"{COLOR_BLUE}{'POLL_INTERVAL_SEC'.ljust(25)} {COLOR_GREEN}{str(config.get('POLL_INTERVAL_SEC')).ljust(15)}{COLOR_RESET} (Интервал опроса устройств в секундах)")
+        print(
+            f"{COLOR_BLUE}{'MIN_DB_WRITE_INTERVAL_SEC'.ljust(25)} {COLOR_GREEN}{str(config.get('MIN_DB_WRITE_INTERVAL_SEC')).ljust(15)}{COLOR_RESET} (Минимальный интервал записи в базу данных в секундах)")
+        print(
+            f"{COLOR_BLUE}{'NO_RESPONSE_THRESHOLD_SEC'.ljust(25)} {COLOR_GREEN}{str(config.get('NO_RESPONSE_THRESHOLD_SEC')).ljust(15)}{COLOR_RESET} (Порог времени без ответа от устройства в секундах)")
+        print(
+            f"{COLOR_BLUE}{'TELEGRAM_HEADER'.ljust(25)} {COLOR_GREEN}{str(config.get('TELEGRAM_HEADER')).ljust(15)}{COLOR_RESET} (Заголовок для сообщений в Telegram)")
+        print(
+            f"{COLOR_BLUE}{'FLASK_HOST'.ljust(25)} {COLOR_GREEN}{str(config.get('FLASK_HOST')).ljust(15)}{COLOR_RESET} (Адрес Flask-приложения)")
+        print(
+            f"{COLOR_BLUE}{'FLASK_PORT'.ljust(25)} {COLOR_GREEN}{str(config.get('FLASK_PORT')).ljust(15)}{COLOR_RESET} (Порт Flask-приложения)")
     except Exception as e:
         print(f"[ERROR] Ошибка при загрузке конфигурации из JSON файла: {e}")
 
@@ -139,6 +166,7 @@ print(f"[INFO] SERIAL_PORT установлен в {SERIAL_PORT}")
 # Загрузка конфигурации из JSON файла
 load_config_from_json("config.json")
 
+
 #####################################################
 # ФУНКЦИЯ: получаем новый ключ из Flask
 #####################################################
@@ -162,7 +190,291 @@ def get_new_key_from_web():
         return None
 
 
+#####################################################
+# ФУНКЦИИ ДЛЯ MQTT (УЛУЧШЕННЫЕ)
+#####################################################
 
+def get_mqtt_topic():
+    """
+    Формирует MQTT топик в формате: sp/200000891619/out/meter/data/post
+    где sp - из MQTT_TOPIC, 200000891619 - из DEVICE_SERIAL
+    """
+    return f"{MQTT_TOPIC}/{DEVICE_SERIAL}/out/meter/data/post"
+
+
+def on_mqtt_connect(client, userdata, flags, rc):
+    """Callback при подключении к MQTT брокеру"""
+    global is_mqtt_connected, mqtt_reconnect_attempts
+    if rc == 0:
+        print(f"[MQTT] Успешно подключен к {MQTT_BROKER}:{MQTT_PORT}")
+        is_mqtt_connected = True
+        mqtt_reconnect_attempts = 0
+
+        # При подключении пытаемся отправить все сообщения из очереди
+        process_mqtt_queue()
+    else:
+        print(f"[MQTT] Ошибка подключения, код: {rc}")
+        is_mqtt_connected = False
+
+
+def on_mqtt_disconnect(client, userdata, rc):
+    """Callback при отключении от MQTT брокера"""
+    global is_mqtt_connected
+    print(f"[MQTT] Отключен от брокера, код: {rc}")
+    is_mqtt_connected = False
+
+
+def on_mqtt_publish(client, userdata, mid):
+    """Callback при успешной публикации сообщения"""
+    print(f"[MQTT] Сообщение {mid} доставлено")
+
+
+def initialize_mqtt_client():
+    """Инициализирует и настраивает MQTT клиент"""
+    global mqtt_client
+    try:
+        client = mqtt.Client()
+        client.on_connect = on_mqtt_connect
+        client.on_disconnect = on_mqtt_disconnect
+        client.on_publish = on_mqtt_publish
+
+        # Настройка таймаутов и повторных подключений
+        client.reconnect_delay_set(min_delay=1, max_delay=30)
+        return client
+    except Exception as e:
+        print(f"[ERROR] Ошибка инициализации MQTT клиента: {e}")
+        return None
+
+
+def try_connect_mqtt():
+    """
+    Пытается подключиться к MQTT с обработкой ошибок и повторными попытками.
+    Возвращает (mqtt_client, success_flag)
+    """
+    global mqtt_client, is_mqtt_connected, mqtt_reconnect_attempts
+
+    if mqtt_client is None:
+        mqtt_client = initialize_mqtt_client()
+        if mqtt_client is None:
+            return (None, False)
+
+    try:
+        print(f"[MQTT] Подключение к {MQTT_BROKER}:{MQTT_PORT}...")
+        mqtt_client.connect(MQTT_BROKER, MQTT_PORT, MQTT_KEEPALIVE)
+        mqtt_client.loop_start()  # Запускаем фоновый цикл для обработки сообщений
+        time.sleep(1)  # Даем время для установления соединения
+
+        if is_mqtt_connected:
+            print(f"[MQTT] Успешно подключен к {MQTT_BROKER}:{MQTT_PORT}")
+            mqtt_reconnect_attempts = 0
+            return (mqtt_client, True)
+        else:
+            mqtt_reconnect_attempts += 1
+            print(f"[MQTT] Попытка подключения {mqtt_reconnect_attempts} не удалась")
+            return (mqtt_client, False)
+
+    except Exception as e:
+        mqtt_reconnect_attempts += 1
+        print(f"[ERROR] MQTT connect error: {e}")
+        return (mqtt_client, False)
+
+
+def send_mqtt_message(payload: dict) -> bool:
+    """
+    Отправляет сообщение в MQTT с проверкой подключения и обработкой ошибок.
+    Возвращает True если успешно, False если ошибка.
+    """
+    global mqtt_client, is_mqtt_connected
+
+    print(
+        f"[DEBUG] send_mqtt_message вызвана, mqtt_client={mqtt_client is not None}, is_mqtt_connected={is_mqtt_connected}")
+
+    if mqtt_client is None:
+        print("[ERROR] MQTT client not initialized")
+        return False
+
+    if not is_mqtt_connected:
+        print("[ERROR] MQTT client not connected")
+        return False
+
+    try:
+        msg = json.dumps(payload)
+        topic = get_mqtt_topic()
+        print(f"[DEBUG] Отправка MQTT сообщения в топик: {topic}")
+        print(f"[DEBUG] Сообщение: {msg}")
+
+        result = mqtt_client.publish(topic, msg, qos=MQTT_QOS)
+
+        # Ждем подтверждения публикации для QoS > 0
+        if MQTT_QOS > 0:
+            result.wait_for_publish(timeout=2.0)
+
+        if result.rc == mqtt.MQTT_ERR_SUCCESS:
+            print(f"[MQTT] Published to {topic}: {msg}")
+            return True
+        else:
+            print(f"[MQTT] Publish failed with code: {result.rc}")
+            # Если публикация не удалась, помечаем соединение как разорванное
+            is_mqtt_connected = False
+            return False
+
+    except Exception as e:
+        print(f"[MQTT] Publish error: {e}")
+        is_mqtt_connected = False
+        return False
+
+def queue_mqtt_message(payload: dict):
+    """
+    Добавляет сообщение в очередь для отправки.
+    Если MQTT подключен - отправляет сразу.
+    Если нет - сохраняет в очередь.
+    """
+    global mqtt_message_queue
+
+    print(f"[DEBUG] queue_mqtt_message вызвана, is_mqtt_connected={is_mqtt_connected}")
+
+    # Если подключены, пытаемся отправить сразу
+    if is_mqtt_connected:
+        print("[DEBUG] MQTT подключен, пытаемся отправить сразу")
+        if send_mqtt_message(payload):
+            return True
+        else:
+            # Если отправка не удалась, добавляем в очередь
+            mqtt_message_queue.put(payload)
+            print(f"[MQTT] Сообщение добавлено в очередь (размер очереди: {mqtt_message_queue.qsize()})")
+            return False
+    else:
+        # Если не подключены, просто добавляем в очередь
+        mqtt_message_queue.put(payload)
+        print(f"[MQTT] Сообщение добавлено в очередь (размер очереди: {mqtt_message_queue.qsize()})")
+        return False
+
+def process_mqtt_queue():
+    """
+    Обрабатывает очередь сообщений, отправляя их если MQTT подключен.
+    Возвращает количество отправленных сообщений.
+    """
+    global mqtt_message_queue, is_mqtt_connected
+
+    if not is_mqtt_connected or mqtt_message_queue.empty():
+        return 0
+
+    sent_count = 0
+    temp_queue = Queue()
+
+    # Обрабатываем все сообщения в очереди
+    while not mqtt_message_queue.empty():
+        payload = mqtt_message_queue.get()
+
+        if send_mqtt_message(payload):
+            sent_count += 1
+            print(f"[MQTT] Отправлено сообщение из очереди ({sent_count})")
+        else:
+            # Если отправка не удалась, возвращаем сообщение в очередь
+            temp_queue.put(payload)
+
+    # Возвращаем неотправленные сообщения обратно в основную очередь
+    while not temp_queue.empty():
+        mqtt_message_queue.put(temp_queue.get())
+
+    if sent_count > 0:
+        print(f"[MQTT] Успешно отправлено {sent_count} сообщений из очереди")
+
+    return sent_count
+
+
+def check_and_reconnect_mqtt_if_needed():
+    """
+    Проверяет, есть ли неотправленные сообщения и пытается переподключиться если нужно.
+    Возвращает True если переподключение успешно или не требуется.
+    """
+    global is_mqtt_connected, mqtt_message_queue
+
+    # Если нет неотправленных сообщений, не переподключаемся
+    if mqtt_message_queue.empty():
+        return True
+
+    # Если есть неотправленные сообщения и нет подключения, пытаемся восстановить
+    if not is_mqtt_connected:
+        print(f"[MQTT] Есть {mqtt_message_queue.qsize()} неотправленных сообщений, пытаемся восстановить соединение...")
+        mqtt_client, ok = try_connect_mqtt()
+        if ok:
+            print("[MQTT] Соединение восстановлено для отправки сообщений из очереди")
+            return True
+        else:
+            print("[MQTT] Не удалось восстановить соединение")
+            return False
+
+    return True
+
+
+def send_initial_state_to_mqtt():
+    """
+    Отправляет полное состояние всех контролируемых устройств из базы данных при старте программы.
+    """
+    print("[INFO] Отправка начального состояния всех устройств...")
+
+    s = SessionLocal()
+    try:
+        # Получаем все ячейки для текущей стороны
+        hv_cells = s.query(HVCell).filter(HVCell.side == DEVICE_SIDE).all()
+
+        if not hv_cells:
+            print("[INFO] Нет устройств для отправки начального состояния")
+            return
+
+        # Группируем по unit_id
+        devices_state = defaultdict(list)
+
+        for cell in hv_cells:
+            if cell.value is not None:
+                devices_state[cell.unit_id].append({
+                    "tag": cell.mqtt_channel,  # Ключ "tag" вместо "channel_name"
+                    "val": bool(cell.value)
+                })
+
+        # Формируем payload для каждого устройства
+        devices_list = []
+        timestamp_str = datetime.now().strftime("%Y-%m-%dT%H:%M:%S%z")
+
+        for unit_id, tags in devices_state.items():
+            if tags:  # Если есть данные для этого устройства
+                dev_payload = {
+                    "id": unit_id,
+                    "type": DEVICE_TYPE,
+                    "serial": unit_id,
+                    "vals": [{
+                        "ts": timestamp_str,
+                        "diff": 0,
+                        "tags": tags
+                    }]
+                }
+                devices_list.append(dev_payload)
+
+        if devices_list:
+            final_payload = {
+                "name": DEVICE_NAME,
+                "serial": DEVICE_SERIAL,
+                "fw": DEVICE_FW,
+                "measures": [{
+                    "measure": "mDIn",
+                    "devices": devices_list
+                }]
+            }
+
+            # Отправляем начальное состояние
+            success = queue_mqtt_message(final_payload)
+            if success:
+                print(f"[INFO] Отправлено начальное состояние для {len(devices_list)} устройств")
+            else:
+                print(f"[INFO] Начальное состояние добавлено в очередь для {len(devices_list)} устройств")
+        else:
+            print("[INFO] Нет данных для отправки начального состояния")
+
+    except Exception as e:
+        print(f"[ERROR] Ошибка при отправке начального состояния: {e}")
+    finally:
+        s.close()
 #####################################################
 # СОЕДИНЕНИЕ С БД + ВЫБОРКА HVCell
 #####################################################
@@ -217,6 +529,7 @@ for unit_id, cells in devices_map.items():
 
 print(f"[INFO] Обнаружено {len(devices_info)} устройств (unit_id), всего {len(hv_cells_all)} регистров.")
 
+
 #####################################################
 # Остальной код программы...
 #####################################################
@@ -234,11 +547,13 @@ def calculate_crc(data: bytes) -> int:
                 crc >>= 1
     return crc
 
+
 def create_modbus_request(unit_id: int, function_code: int, start_address: int, quantity: int) -> bytes:
     req = struct.pack('>BBHH', unit_id, function_code, start_address, quantity)
     crc_val = calculate_crc(req)
     req += struct.pack('<H', crc_val)
     return req
+
 
 def send_modbus_request(ser: serial.Serial, request: bytes) -> bytes:
     ser.write(request)
@@ -247,6 +562,7 @@ def send_modbus_request(ser: serial.Serial, request: bytes) -> bytes:
     time.sleep(0.02)
     response = ser.read(256)
     return response
+
 
 def parse_multiple_coils(response: bytes, quantity: int):
     """Парсим ответ при чтении coils (function=1). Возвращаем список [0/1,...] длиной quantity или None."""
@@ -259,7 +575,7 @@ def parse_multiple_coils(response: bytes, quantity: int):
         return None
 
     byte_count = response[2]
-    data_bytes = response[3:3+byte_count]
+    data_bytes = response[3:3 + byte_count]
 
     if len(data_bytes) < byte_count:
         return None
@@ -271,6 +587,7 @@ def parse_multiple_coils(response: bytes, quantity: int):
         val = (data_bytes[byte_i] >> bit_i) & 0x01
         coil_vals.append(val)
     return coil_vals
+
 
 def send_telegram_message(text: str):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -284,6 +601,7 @@ def send_telegram_message(text: str):
     except Exception as e:
         print(f"[TG] Exception: {e}")
 
+
 def send_telegram_error_once_in_period(error_text, last_send_time, period_sec=3600):
     """
     Отправляет error_text в Телеграм, если с момента last_send_time
@@ -294,6 +612,7 @@ def send_telegram_error_once_in_period(error_text, last_send_time, period_sec=36
         send_telegram_message(error_text)
         return now
     return last_send_time  # если не отправили, возвращаем старое время
+
 
 def open_serial_port_with_retries():
     """
@@ -327,28 +646,6 @@ def open_serial_port_with_retries():
             # Ждём минуту и повторяем
             time.sleep(60)
 
-def try_connect_mqtt():
-    """
-    Пытается подключиться к MQTT один раз.
-    Возвращает (mqtt_client, True/False) где True/False - флаг, получилось ли
-    """
-    client = mqtt.Client()
-    try:
-        client.connect(MQTT_BROKER, MQTT_PORT, 60)
-        print(f"[INFO] MQTT connected to {MQTT_BROKER}:{MQTT_PORT}")
-        return (client, True)
-    except Exception as e:
-        print(f"[ERROR] MQTT connect error: {e}")
-        return (client, False)
-
-
-def send_mqtt_message(payload: dict):
-    try:
-        msg = json.dumps(payload)
-        mqtt_client.publish(MQTT_TOPIC, msg)
-        print(f"[MQTT] Published to {MQTT_TOPIC}: {msg}")
-    except Exception as e:
-        print(f"[MQTT] Publish error: {e}")
 
 # Помощники для работы с БД
 def update_db_value(cell_id: int, new_val: bool):
@@ -360,6 +657,7 @@ def update_db_value(cell_id: int, new_val: bool):
         s.commit()
     s.close()
 
+
 def update_db_value_date(cell_id: int):
     s = SessionLocal()
     c = s.get(HVCell, cell_id)
@@ -367,6 +665,7 @@ def update_db_value_date(cell_id: int):
         c.value_date = datetime.now()
         s.commit()
     s.close()
+
 
 #####################################################
 # ПЕРЕМЕННЫЕ ДЛЯ ЛОГИКИ
@@ -393,11 +692,9 @@ s.close()
 
 print("[INFO] Инициализация previous_values из БД завершена.")
 
-
 #####################################################
 # ПОДГОТОВКА SERIAL / MQTT
 #####################################################
-
 
 print("[INFO] Инициализация COM-порта...")
 serial_port = open_serial_port_with_retries()  # бесконечно пытается открыть COM
@@ -405,12 +702,11 @@ serial_port = open_serial_port_with_retries()  # бесконечно пытае
 print("[INFO] Инициализация MQTT...")
 mqtt_client, is_mqtt_connected = try_connect_mqtt()
 if not is_mqtt_connected:
-    # Можно один раз выдать сообщение в Телеграм:
-    last_mqtt_error_telegram_time = send_telegram_error_once_in_period(
-        f"Нет связи с MQTT {MQTT_BROKER}",
-        last_mqtt_error_telegram_time,
-        3600
-    )
+    print("[INFO] MQTT не подключен, но программа продолжит работу. Сообщения будут накапливаться в очереди.")
+
+# Отправляем начальное состояние всех устройств
+send_initial_state_to_mqtt()
+
 
 #####################################################
 # ПОЗДОРОВАЙСЯ
@@ -436,35 +732,26 @@ def send_initial_telegram_message():
 
     send_telegram_message(msg_text)
 
-send_initial_telegram_message()
 
+send_initial_telegram_message()
 
 #####################################################
 # ГЛАВНЫЙ ЦИКЛ
 #####################################################
 print("[INFO] Старт опроса...")
 
-last_mqtt_retry_time = datetime.now()
-MQTT_RETRY_INTERVAL_SEC = 300  # каждые 5 минут новая попытка
+last_mqtt_queue_check = datetime.now()
+MQTT_QUEUE_CHECK_INTERVAL = 60  # Проверять очередь раз в минуту
 
 while True:
-    # 1) Проверяем: не пора ли повторить подключение к MQTT?
-    #    (Если is_mqtt_connected == False)
-    if not is_mqtt_connected:
-        now = datetime.now()
-        if (now - last_mqtt_retry_time).total_seconds() >= MQTT_RETRY_INTERVAL_SEC:
-            mqtt_client, ok = try_connect_mqtt()
-            if ok:
-                is_mqtt_connected = True
-                print("[INFO] MQTT подключение восстановлено.")
-            else:
+    current_time = datetime.now()
 
-                last_mqtt_error_telegram_time = send_telegram_error_once_in_period(
-                    f"Нет связи с MQTT {MQTT_BROKER}",
-                    last_mqtt_error_telegram_time,
-                    3600
-                )
-            last_mqtt_retry_time = now
+    # 1) Периодически проверяем очередь MQTT (раз в минуту)
+    if (current_time - last_mqtt_queue_check).total_seconds() >= MQTT_QUEUE_CHECK_INTERVAL:
+        if not mqtt_message_queue.empty():
+            print(f"[MQTT] В очереди {mqtt_message_queue.qsize()} сообщений, проверяем соединение...")
+            check_and_reconnect_mqtt_if_needed()
+        last_mqtt_queue_check = current_time
 
     changed_params = []
     telegram_msgs = []
@@ -474,8 +761,6 @@ while True:
         unit_id = dev_info["unit_id"]
         start_addr = dev_info["min_coil"]
         quantity = 16
-
-        # print(f"[DEBUG] Опрос unit_id={unit_id}, coil_range=[{start_addr}..{start_addr + quantity - 1}]")
 
         # Формируем запрос
         req = create_modbus_request(unit_id, 1, start_addr, quantity)
@@ -511,7 +796,6 @@ while True:
                 print(f"[DEBUG] Первая попытка — не отправляем тревогу.")
             continue
         else:
-            # print(f"[DEBUG] Успешно прочитали unit_id={unit_id}, coil_vals={coil_vals}")
             now_success = datetime.now()
             last_success_device[uid] = now_success
             if alert_sent[uid]:
@@ -547,8 +831,6 @@ while True:
                         "desc": cell_found["param_desc"] or cell_found["cell_name"] or f"Cell {cid}",
                         "state_str": st_str
                     })
-                    param_name = cell_found["param_desc"] or cell_found["cell_name"] or f"Cell {cid}"
-                    # telegram_msgs.append(f"{param_name}: {st_str}")
 
                 elif old_val is None:
                     # Первая инициализация
@@ -562,7 +844,7 @@ while True:
                         update_db_value_date(cid)
                         last_db_write_time[cid] = datetime.now()
 
-    # 3) Если есть изменения, шлём MQTT (если подключено) и Телеграм
+    # 3) Если есть изменения, отправляем данные
     if changed_params:
         timestamp_str = time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime())
         dev_dict = defaultdict(list)
@@ -596,18 +878,17 @@ while True:
             }]
         }
 
-        # Отправляем MQTT, только если подключено
-        if is_mqtt_connected:
-            send_mqtt_message(final_payload)
-        else:
-            print("[WARN] Изменения были, но MQTT не подключено — пропускаем отправку.")
+        # Используем очередь для отправки MQTT сообщений
+        mqtt_success = queue_mqtt_message(final_payload)
+        if not mqtt_success and not is_mqtt_connected:
+            print(f"[WARN] MQTT не подключен, сообщение добавлено в очередь ({mqtt_message_queue.qsize()} в очереди)")
 
         # Группируем изменения по ячейке
         changes_by_cell = defaultdict(list)
 
         for ch in changed_params:
             # Ключ - строка, которая содержит номер и название ячейки
-            cell_label = f"\n\n==========> Ячейка №{ch['cell_number']} {ch['cell_name']}"
+            cell_label = f"Ячейка №{ch['cell_number']} {ch['cell_name']}"
             param_name = ch["desc"]  # Например "Выключатель включен"
             state_str = ch["state_str"]  # Например "НЕТ"
             # Запишем
@@ -617,15 +898,15 @@ while True:
         telegram_msgs = []
         for cell_label, items in changes_by_cell.items():
             # Сначала - заголовок ячейки
-            telegram_msgs.append(cell_label)
+            telegram_msgs.append(f"\n\n==========> {cell_label}")
             # Потом - строки "Параметр: Состояние"
             for (param_name, state_str) in items:
                 telegram_msgs.append(f"{param_name}: {state_str}")
 
-        # 3) Собираем всё в один msg_text
+        # Собираем всё в один msg_text
         msg_text = f"{TELEGRAM_HEADER}\n\nИзменения:\n" + "\n".join(telegram_msgs)
 
-        # *** ВАЖНО ***: Получаем новый ключ у Flask
+        # Получаем новый ключ у Flask
         new_key = get_new_key_from_web()
         if new_key:
             # Формируем ссылку
