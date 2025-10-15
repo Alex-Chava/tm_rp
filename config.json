@@ -1,6 +1,6 @@
 {
     "SERIAL_BAUDRATE": 115200,
-    "MQTT_BROKER": "mqtt.umxx.ru",
+    "MQTT_BROKER": "188.127.236.72",
     "MQTT_PORT": 1883,
     "MQTT_TOPIC": "sp",
     "TELEGRAM_TOKEN": "7276598964:AAFt4HhaGcjywp1-izbU6YAe8CLJI1RXrRM",
