@@ -100,4 +100,15 @@ sudo systemctl enable tm_sync@1.service
 sudo systemctl enable tm_sync@2.service
 sudo systemctl enable tm_askue.service
 
-echo "Установка завершена!"
+# Устанавливаем только нужные локали
+sudo sed -i '/^[^#]/d' /etc/locale.gen
+echo "en_US.UTF-8 UTF-8" | sudo tee -a /etc/locale.gen
+echo "ru_RU.UTF-8 UTF-8" | sudo tee -a /etc/locale.gen
+
+# Генерируем локали
+sudo locale-gen
+
+# Устанавливаем русскую локаль по умолчанию
+sudo update-locale LANG=ru_RU.UTF-8 LC_TIME=ru_RU.UTF-8
+
+echo "Установка завершена! Перезагрузите систему"
