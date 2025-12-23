@@ -5,14 +5,16 @@ import struct
 import requests
 import paho.mqtt.client as mqtt
 import serial
+import threading
+from queue import Queue, Full, Empty
+
 
 from datetime import datetime, timedelta
 from sqlalchemy import create_engine, func
 from sqlalchemy.orm import sessionmaker
-from app.models import HVCell
+from app.models import HVCell, AskueData
 
 from collections import defaultdict
-from queue import Queue
 
 #####################################################
 # НАСТРОЙКИ
@@ -23,7 +25,7 @@ COLOR_GREEN = "\033[32m"
 COLOR_BLUE = "\033[36m"
 
 # Значения по умолчанию
-DB_URL = "sqlite:///database.db"
+DB_URL = None
 SERIAL_BAUDRATE = 115200
 MQTT_BROKER = "mqtt.umxx.ru"
 MQTT_PORT = 1883
@@ -65,6 +67,15 @@ serial_port = None
 last_com_error_telegram_time = None
 last_mqtt_error_telegram_time = None
 
+# === WEB KEY cache (обновляем 1 раз в сутки) ===
+current_web_key = None
+current_web_key_date = None  # date()
+
+# Очередь для Telegram (чтобы не блокировать основной цикл)
+tg_queue = Queue(maxsize=500)
+tg_worker_thread = None
+
+
 
 #####################################################
 # ФУНКЦИЯ: Загрузка конфигурации из JSON файла
@@ -81,6 +92,8 @@ def load_config_from_json(file_path):
         global SERIAL_BAUDRATE, MQTT_BROKER, MQTT_PORT, MQTT_TOPIC, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID
         global DEVICE_NAME, DEVICE_SERIAL, DEVICE_FW, DEVICE_TYPE, POLL_INTERVAL_SEC
         global MIN_DB_WRITE_INTERVAL_SEC, NO_RESPONSE_THRESHOLD_SEC, TELEGRAM_HEADER, FLASK_HOST, FLASK_PORT
+        global FULL_STATE_INTERVAL_SEC
+        global DB_URL
 
         SERIAL_BAUDRATE = config.get("SERIAL_BAUDRATE", SERIAL_BAUDRATE)
         MQTT_BROKER = config.get("MQTT_BROKER", MQTT_BROKER)
@@ -98,6 +111,8 @@ def load_config_from_json(file_path):
         TELEGRAM_HEADER = config.get("TELEGRAM_HEADER", TELEGRAM_HEADER)
         FLASK_HOST = config.get("FLASK_HOST", FLASK_HOST)
         FLASK_PORT = config.get("FLASK_PORT", FLASK_PORT)
+        FULL_STATE_INTERVAL_SEC = config.get("FULL_STATE_INTERVAL_SEC", 3600)
+        DB_URL = f"sqlite:///{DEVICE_NAME}.db"
 
         # Выводим значения всех полей с комментариями, выровненными по столбцам
         print(f"[INFO]КОНФИГУРАЦИЯ ЗАГРУЖЕНА. Значения полей:")
@@ -135,7 +150,9 @@ def load_config_from_json(file_path):
             f"{COLOR_BLUE}{'FLASK_PORT'.ljust(25)} {COLOR_GREEN}{str(config.get('FLASK_PORT')).ljust(15)}{COLOR_RESET} (Порт Flask-приложения)")
     except Exception as e:
         print(f"[ERROR] Ошибка при загрузке конфигурации из JSON файла: {e}")
-
+        print(
+            f"{COLOR_BLUE}{'FULL_STATE_PUBLISH_SEC'.ljust(25)} {COLOR_GREEN}{str(config.get('FULL_STATE_PUBLISH_SEC')).ljust(15)}{COLOR_RESET} (Интервал отправки полного состояния в MQTT, сек)")
+        print(f"[INFO] DB_URL установлен в {DB_URL}")
 
 #####################################################
 # Обработка аргументов командной строки
@@ -176,7 +193,7 @@ def get_new_key_from_web():
     чтобы сгенерировать новый ключ в Flask
     и вернуть его сюда.
     """
-    url = f"http://{FLASK_HOST_KEY}:{FLASK_PORT}/api/new_key"
+    url = f"http://{FLASK_HOST_KEY}:{FLASK_PORT}/api/web_key"
     try:
         resp = requests.get(url, timeout=3)
         if resp.status_code == 200:
@@ -188,6 +205,32 @@ def get_new_key_from_web():
     except Exception as e:
         print(f"[ERROR] Не удалось получить новый ключ: {e}")
         return None
+
+def get_web_key_daily():
+    """
+    Возвращает текущий ключ для WEB.
+    Обновляет ключ только если наступил новый день (по локальному времени).
+    """
+    global current_web_key, current_web_key_date
+
+    today = datetime.now().date()
+
+    # Если ключ ещё не получали — получаем
+    if current_web_key is None or current_web_key_date is None:
+        k = get_new_key_from_web()
+        if k:
+            current_web_key = k
+            current_web_key_date = today
+        return current_web_key
+
+    # Если день сменился — обновляем
+    if today != current_web_key_date:
+        k = get_new_key_from_web()
+        if k:
+            current_web_key = k
+            current_web_key_date = today
+
+    return current_web_key
 
 
 #####################################################
@@ -456,6 +499,7 @@ def send_initial_state_to_mqtt():
                 "name": DEVICE_NAME,
                 "serial": DEVICE_SERIAL,
                 "fw": DEVICE_FW,
+                "is_event": True,
                 "measures": [{
                     "measure": "mDIn",
                     "devices": devices_list
@@ -475,6 +519,142 @@ def send_initial_state_to_mqtt():
         print(f"[ERROR] Ошибка при отправке начального состояния: {e}")
     finally:
         s.close()
+def send_full_state_to_mqtt(is_event: bool = False):
+    """
+    Отправляет полное состояние всех тегов из БД в MQTT.
+    is_event=False для периодических снимков.
+    """
+    print("[INFO] Отправка полного состояния всех устройств...")
+
+    s = SessionLocal()
+    try:
+        hv_cells = s.query(HVCell).filter(HVCell.side == DEVICE_SIDE).all()
+        if not hv_cells:
+            print("[INFO] Нет устройств для отправки полного состояния")
+            return
+
+        devices_state = defaultdict(list)
+
+        for cell in hv_cells:
+            # отправляем даже None? обычно нет смысла — оставим как было: только если есть значение
+            if cell.value is not None:
+                devices_state[cell.unit_id].append({
+                    "tag": cell.mqtt_channel,
+                    "val": bool(cell.value)
+                })
+
+        devices_list = []
+        timestamp_str = datetime.now().astimezone().isoformat(timespec="seconds")
+
+        for unit_id, tags in devices_state.items():
+            if tags:
+                dev_payload = {
+                    "id": unit_id,
+                    "type": DEVICE_TYPE,
+                    "serial": unit_id,
+                    "vals": [{
+                        "ts": timestamp_str,
+                        "diff": 0,
+                        "tags": tags
+                    }]
+                }
+                devices_list.append(dev_payload)
+
+        if not devices_list:
+            print("[INFO] Нет данных для отправки полного состояния")
+            return
+
+        final_payload = {
+            "name": DEVICE_NAME,
+            "serial": DEVICE_SERIAL,
+            "fw": DEVICE_FW,
+            "is_event": bool(is_event),
+            "measures": [{
+                "measure": "mDIn",
+                "devices": devices_list
+            }]
+        }
+
+        ok = queue_mqtt_message(final_payload)
+        if ok:
+            print(f"[INFO] Полное состояние отправлено ({len(devices_list)} устройств)")
+        else:
+            print(f"[INFO] Полное состояние добавлено в очередь ({len(devices_list)} устройств)")
+
+    except Exception as e:
+        print(f"[ERROR] Ошибка при отправке полного состояния: {e}")
+    finally:
+        s.close()
+def send_askue_snapshot_to_mqtt():
+    """
+    Отправляет в MQTT один "снимок" всех доступных AskueData.
+    В телеграм не дублируем.
+    """
+    s = SessionLocal()
+    try:
+        rows = s.query(AskueData).all()
+        if not rows:
+            return
+
+        devices_list = []
+        ts_now = datetime.now().astimezone().isoformat(timespec="seconds")
+
+        for r in rows:
+            tags = []
+
+            # базовые поля, чтобы на стороне сервера легче связывать
+            if r.cell_number is not None:
+                tags.append({"tag": "cell_number", "val": int(r.cell_number)})
+            if r.ktt is not None:
+                tags.append({"tag": "ktt", "val": float(r.ktt)})
+            if r.ktn is not None:
+                tags.append({"tag": "ktn", "val": float(r.ktn)})
+
+            # электрические параметры
+            for key in ["UA","UB","UC","IA","IB","IC","PS","PA","PB","PC","QS","QA","QB","QC",
+                        "AngAB","AngBC","AngAC","kPS","kPA","kPB","kPC","Freq"]:
+                val = getattr(r, key, None)
+                if val is not None:
+                    tags.append({"tag": key, "val": float(val)})
+
+            # временная метка из БД, если есть
+            if r.last_update is not None:
+                try:
+                    ts = r.last_update.astimezone().isoformat(timespec="seconds")
+                except Exception:
+                    ts = ts_now
+            else:
+                ts = ts_now
+
+            devices_list.append({
+                "id": r.meter_serial,
+                "type": DEVICE_TYPE,
+                "serial": r.meter_serial,
+                "vals": [{
+                    "ts": ts,
+                    "diff": 0,
+                    "tags": tags
+                }]
+            })
+
+        payload = {
+            "name": DEVICE_NAME,
+            "serial": DEVICE_SERIAL,
+            "fw": DEVICE_FW,
+            "is_event": False,
+            "measures": [{
+                "measure": "aQual",
+                "devices": devices_list
+            }]
+        }
+
+        queue_mqtt_message(payload)
+
+    except Exception as e:
+        print(f"[ERROR] Ошибка отправки ASKUE snapshot: {e}")
+    finally:
+        s.close()
+
 #####################################################
 # СОЕДИНЕНИЕ С БД + ВЫБОРКА HVCell
 #####################################################
@@ -589,17 +769,67 @@ def parse_multiple_coils(response: bytes, quantity: int):
     return coil_vals
 
 
-def send_telegram_message(text: str):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    data = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML"}
+# def send_telegram_message(text: str):
+#     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+#     data = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML"}
+#     try:
+#         r = requests.post(url, data=data)
+#         if r.status_code == 200:
+#             print(f"[TG] Sent: {text}")
+#         else:
+#             print(f"[TG] Error {r.status_code}: {r.text}")
+#     except Exception as e:
+#         print(f"[TG] Exception: {e}")
+
+def send_telegram_message_async(text: str):
+    """
+    Не блокирует основной поток: кладём сообщение в очередь.
+    Если очередь переполнена — молча дропаем (или можно логировать).
+    """
     try:
-        r = requests.post(url, data=data)
-        if r.status_code == 200:
-            print(f"[TG] Sent: {text}")
+        tg_queue.put_nowait(text)
+        return True
+    except Full:
+        print("[TG] Очередь переполнена, сообщение отброшено")
+        return False
+
+
+def telegram_worker():
+    """
+    Фоновый поток, который реально отправляет сообщения в Telegram.
+    С таймаутами и ретраями.
+    """
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+
+    while True:
+        try:
+            text = tg_queue.get(timeout=1)
+        except Empty:
+            continue
+
+        data = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML"}
+
+        ok = False
+        for attempt in range(3):
+            try:
+                # ВАЖНО: timeout обязателен
+                r = requests.post(url, data=data, timeout=(3, 7))  # connect=3s, read=7s
+                if r.status_code == 200:
+                    ok = True
+                    break
+                else:
+                    print(f"[TG] Error {r.status_code}: {r.text}")
+            except Exception as e:
+                print(f"[TG] Exception: {e}")
+
+            time.sleep(2)  # небольшая пауза перед повтором
+
+        if ok:
+            print(f"[TG] Sent: {text[:80]}...")
         else:
-            print(f"[TG] Error {r.status_code}: {r.text}")
-    except Exception as e:
-        print(f"[TG] Exception: {e}")
+            print("[TG] Failed after retries")
+
+        tg_queue.task_done()
 
 
 def send_telegram_error_once_in_period(error_text, last_send_time, period_sec=3600):
@@ -609,7 +839,7 @@ def send_telegram_error_once_in_period(error_text, last_send_time, period_sec=36
     """
     now = datetime.now()
     if last_send_time is None or (now - last_send_time).total_seconds() >= period_sec:
-        send_telegram_message(error_text)
+        send_telegram_message_async(error_text)
         return now
     return last_send_time  # если не отправили, возвращаем старое время
 
@@ -704,8 +934,14 @@ mqtt_client, is_mqtt_connected = try_connect_mqtt()
 if not is_mqtt_connected:
     print("[INFO] MQTT не подключен, но программа продолжит работу. Сообщения будут накапливаться в очереди.")
 
-# Отправляем начальное состояние всех устройств
-send_initial_state_to_mqtt()
+# Запуск фонового отправщика Telegram
+tg_worker_thread = threading.Thread(target=telegram_worker, daemon=True)
+tg_worker_thread.start()
+print("[TG] Telegram worker started")
+
+
+# Отправляем начальное состояние всех устройств (это НЕ событие)
+send_full_state_to_mqtt(is_event=False)
 
 
 #####################################################
@@ -722,7 +958,7 @@ def send_initial_telegram_message():
         date_str = "неизвестно"
     else:
         date_str = max_date.strftime("%d.%m.%Y %H:%M:%S")
-    new_key = get_new_key_from_web()
+    new_key = get_web_key_daily()
     msg_text = (
         f"{TELEGRAM_HEADER}\n\n"
         "Запуск мониторинга после отключения.\n"
@@ -730,7 +966,7 @@ def send_initial_telegram_message():
         f'<a href="http://{FLASK_HOST}:{FLASK_PORT}/?key={new_key}">Мнемосхема</a>'
     )
 
-    send_telegram_message(msg_text)
+    send_telegram_message_async(msg_text)
 
 
 send_initial_telegram_message()
@@ -743,8 +979,18 @@ print("[INFO] Старт опроса...")
 last_mqtt_queue_check = datetime.now()
 MQTT_QUEUE_CHECK_INTERVAL = 60  # Проверять очередь раз в минуту
 
+last_full_state_send = datetime.now()
+# FULL_STATE_INTERVAL_SEC = 3600  # раз в час
+
 while True:
     current_time = datetime.now()
+
+    # 0) Раз в час отправляем полный снимок (MQTT only)
+    if (current_time - last_full_state_send).total_seconds() >= FULL_STATE_INTERVAL_SEC:
+        send_full_state_to_mqtt(is_event=False)
+        send_askue_snapshot_to_mqtt()
+        last_full_state_send = current_time
+
 
     # 1) Периодически проверяем очередь MQTT (раз в минуту)
     if (current_time - last_mqtt_queue_check).total_seconds() >= MQTT_QUEUE_CHECK_INTERVAL:
@@ -790,7 +1036,7 @@ while True:
                     msg = (f"Нет ответа от устройства unit_id={uid} >5мин "
                            f"(последний успешный опрос: {last_ok.strftime('%H:%M:%S')}).")
                     print(f"[DEBUG] Отправляем тревогу в телеграм: {msg}")
-                    send_telegram_message(msg)
+                    send_telegram_message_async(msg)
                     alert_sent[uid] = True
             else:
                 print(f"[DEBUG] Первая попытка — не отправляем тревогу.")
@@ -872,6 +1118,7 @@ while True:
             "name": DEVICE_NAME,
             "serial": DEVICE_SERIAL,
             "fw": DEVICE_FW,
+            "is_event": True,
             "measures": [{
                 "measure": "mDIn",
                 "devices": devices_list
@@ -882,6 +1129,9 @@ while True:
         mqtt_success = queue_mqtt_message(final_payload)
         if not mqtt_success and not is_mqtt_connected:
             print(f"[WARN] MQTT не подключен, сообщение добавлено в очередь ({mqtt_message_queue.qsize()} в очереди)")
+
+        # Дополнительно шлём ПКЭ/АСКУЭ в MQTT (в телегу не дублируем)
+        send_askue_snapshot_to_mqtt()
 
         # Группируем изменения по ячейке
         changes_by_cell = defaultdict(list)
@@ -907,13 +1157,14 @@ while True:
         msg_text = f"{TELEGRAM_HEADER}\n\nИзменения:\n" + "\n".join(telegram_msgs)
 
         # Получаем новый ключ у Flask
-        new_key = get_new_key_from_web()
+        new_key = get_web_key_daily()
+
         if new_key:
             # Формируем ссылку
             link = f"http://{FLASK_HOST}:{FLASK_PORT}/?key={new_key}"
             # Добавляем в конец сообщения
             msg_text += f'\n\n<a href="{link}">Подробнее на мнемосхеме</a>'
 
-        send_telegram_message(msg_text)
+        send_telegram_message_async(msg_text)
 
     time.sleep(POLL_INTERVAL_SEC)

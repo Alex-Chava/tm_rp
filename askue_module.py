@@ -31,6 +31,11 @@ logger = logging.getLogger(__name__)
 UM_LOGIN = "SamoletTM"
 UM_PASSWORD = "QhV8GyML"
 
+_cached_sessionid = None
+_cached_sessionid_ts = None
+SESSION_TTL_SEC = 3600  # час
+
+
 # Чтение параметров из config.json
 def get_askue_config():
     """Чтение параметров АСКУЭ из config.json"""
@@ -75,19 +80,32 @@ UM_POLL_SEC = config["UM_POLL_SEC"]
 ##############################################################################
 # Функция авторизации на УМ-31
 ##############################################################################
+
 def askue_auth(ip, retries=3, delay=5):
     """
-    Авторизация на УМ-31 с повторными попытками и сбросом соединения.
+    Авторизация на УМ-31 с повторными попытками.
+    Важно: шлём JSON корректно (json=...), ставим headers, таймауты.
     """
     url = f"http://{ip}/auth"
-    payload = '{"login":"%s","password":"%s"}' % (UM_LOGIN, UM_PASSWORD)
+
+    headers = {
+        "Connection": "close",
+        "Accept": "application/json, text/plain, */*",
+        "Content-Type": "application/json",
+        "User-Agent": "TM-ASKUE/1.0",
+    }
+
+    payload = {"login": UM_LOGIN, "password": UM_PASSWORD}
 
     for attempt in range(retries):
         try:
-            # Создаем новую сессию для каждой попытки
             with requests.Session() as session:
-                headers = {'Connection': 'close'}
-                resp = session.post(url, data=payload, headers=headers, timeout=10)
+                resp = session.post(
+                    url,
+                    json=payload,                 # КЛЮЧЕВОЕ
+                    headers=headers,
+                    timeout=(3, 10)               # connect=3s, read=10s
+                )
 
                 if resp.status_code == 200:
                     sessionid = resp.cookies.get("sessionid")
@@ -95,64 +113,66 @@ def askue_auth(ip, retries=3, delay=5):
                         logger.info("Успешная авторизация на %s (попытка %d)", ip, attempt + 1)
                         return sessionid
 
-                logger.warning("Ошибка авторизации на %s, код: %s (попытка %d)",
-                               ip, resp.status_code, attempt + 1)
+                logger.warning("Ошибка авторизации на %s, код: %s, body: %s (попытка %d)",
+                               ip, resp.status_code, resp.text[:200], attempt + 1)
 
         except Exception as e:
             logger.warning("Исключение при авторизации на %s: %s (попытка %d)",
                            ip, e, attempt + 1)
 
-        # Пауза перед повторной попыткой (кроме последней)
         if attempt < retries - 1:
             time.sleep(delay)
 
     logger.error("Не удалось авторизоваться на %s после %d попыток", ip, retries)
     return None
 
+
 ##############################################################################
 # Функция запроса данных с УМ-31
 ##############################################################################
 def askue_read_data(ip, sessionid):
-    """
-    Запрашивает данные у УМ-31 с использованием sessionid (cookies).
-    Формирует payload, включающий:
-      - tags: список требуемых тегов
-      - measures: ["aQual"]
-      - time: [{"start": <текущий момент в ISO8601>, "end": <текущий момент+10 мин в ISO8601>}]
-    Возвращает JSON-ответ как dict при успехе или None.
-    """
     url = f"http://{ip}/meter/data"
-    # Рассчитываем временной интервал: от текущего момента до +10 минут.
+
     now = datetime.now()
     end_time = now.isoformat()
     start_time = (now - timedelta(minutes=UM_INTERVAL_MIN)).isoformat()
-    time_str = f'[{{"start":"{start_time}","end":"{end_time}"}}]'
 
-    payload = (
-        '{"tags":["UA","UB","UC","IA","IB","IC","PS","PA","PB","PC",'
-        '"QS","QA","QB","QC","AngAB","AngBC","AngAC","kPS","kPA","kPB","kPC","Freq"],'
-        '"measures":["aQual"],'
-        '"ids":[],'
-        '"time":' + time_str + ','
-        '"logtime":{}}'
-    )
+    payload = {
+        "tags": ["UA","UB","UC","IA","IB","IC","PS","PA","PB","PC",
+                 "QS","QA","QB","QC","AngAB","AngBC","AngAC","kPS","kPA","kPB","kPC","Freq"],
+        "measures": ["aQual"],
+        "ids": [],
+        "time": [{"start": start_time, "end": end_time}],
+        "logtime": {}
+    }
+
+    headers = {
+        "Accept": "application/json, text/plain, */*",
+        "Content-Type": "application/json",
+        "User-Agent": "TM-ASKUE/1.0",
+        "Connection": "close",
+    }
+
     cookies = {"sessionid": sessionid}
-    logger.info(payload)
+
     try:
-        resp = requests.post(url, data=payload, cookies=cookies, timeout=5)
+        resp = requests.post(url, json=payload, cookies=cookies, headers=headers, timeout=(3, 10))
         if resp.status_code == 200:
             return resp.json()
-        logger.error("Ошибка чтения данных: код %s", resp.status_code)
+
+        logger.error("Ошибка чтения данных: код %s body=%s", resp.status_code, resp.text[:200])
         return None
+
     except requests.exceptions.Timeout:
-        logger.error("Таймаут соединения: сервер не ответил в течение 5 секунд")
+        logger.error("Таймаут соединения: сервер не ответил")
         return None
-    except requests.exceptions.ConnectionError:
-        logger.error("Ошибка соединения: невозможно подключиться к серверу")
+    except requests.exceptions.ConnectionError as e:
+        logger.error("Ошибка соединения: %s", e)
         return None
     except Exception as e:
         logger.error("Исключение при чтении данных: %s", e)
         return None
+
 
 ##############################################################################
 # Вспомогательная функция для преобразования ISO8601 строки в datetime
@@ -295,20 +315,30 @@ def update_askue_data(parsed):
 # Функция одного цикла опроса
 ##############################################################################
 def askue_poll(ip=UM_IP):
-    """
-    Один цикл опроса:
-      1. Авторизация на устройстве (askue_auth)
-      2. Запрос данных с временным интервалом (10 минут от текущего момента)
-      3. Парсинг JSON-ответа с выбором самой свежей записи для каждого устройства
-      4. Обновление данных в таблице askue_data для каждого устройства
-    """
-    sessionid = askue_auth(ip)
-    if not sessionid:
-        logger.error("Не удалось авторизоваться на %s", ip)
-        return
+    global _cached_sessionid, _cached_sessionid_ts
+
+    now = time.time()
+    if _cached_sessionid and _cached_sessionid_ts and (now - _cached_sessionid_ts) < SESSION_TTL_SEC:
+        sessionid = _cached_sessionid
+    else:
+        sessionid = askue_auth(ip)
+        if not sessionid:
+            logger.error("Не удалось авторизоваться на %s", ip)
+            return
+        _cached_sessionid = sessionid
+        _cached_sessionid_ts = now
 
     data_json = askue_read_data(ip, sessionid)
-    logger.info("Полученные данные: %s", data_json)
+
+    # если сессия протухла — пробуем заново один раз
+    if not data_json:
+        sessionid = askue_auth(ip, retries=1)
+        if not sessionid:
+            return
+        _cached_sessionid = sessionid
+        _cached_sessionid_ts = time.time()
+        data_json = askue_read_data(ip, sessionid)
+
     if not data_json:
         logger.error("Не удалось получить данные с %s", ip)
         return
@@ -318,10 +348,10 @@ def askue_poll(ip=UM_IP):
         logger.error("Ошибка парсинга данных с %s", ip)
         return
 
-    # Обновляем данные для каждого устройства отдельно
     for p in parsed_list:
         update_askue_data(p)
         logger.info("Данные устройства обновлены (meter_serial=%s).", p.get("device_serial", "N/A"))
+
 
 ##############################################################################
 # Основной цикл опроса (раз в UM_POLL_SEC)

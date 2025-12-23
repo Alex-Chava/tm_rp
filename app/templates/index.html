@@ -19,56 +19,101 @@
                     <!-- 2. Название ячейки -->
                     <div class="cell-name">{{ params[0].cell_name }}</div>
 
-                    <!-- 3. Ключ управления местное -->
-                    {% set local_control = params | selectattr('parameter_description', 'equalto', 'Ключ управления местное') | first %}
-                    {% if local_control %}
-                        {% set local_norm = (local_control.value == local_control.display_state) %}
-                        {% if local_norm %}
-                            <img class="image" src="{{ url_for('static', filename='images/nnnn1.png') }}" alt="Key Image">
-                        {% else %}
-                            <img class="image" src="{{ url_for('static', filename='images/nnnn0.png') }}" alt="Key Image">
-                        {% endif %}
+                    {# --- тип ячейки (по умолчанию ОЛ) --- #}
+                    {% set ct = (params[0].cell_type or 'ОЛ') | upper %}
+                    {% if ct not in ['СР','ТН','ТСН','ОЛ'] %}
+                      {% set ct = 'ОЛ' %}
                     {% endif %}
 
-                    <!-- 4. Картинка тележки -->
-                    {% set switch_on = params | selectattr('parameter_description', 'equalto', 'Выключатель включен') | first %}
-                    {% if switch_on %}
-                        {% set switch_on_norm = (switch_on.value == switch_on.display_state) %}
-                        {% set switch_on_val = '1' if switch_on_norm else '0' %}
-                    {% else %}
-                        {% set switch_on_val = '0' %}
-                    {% endif %}
-
-                    {% set switch_off = params | selectattr('parameter_description', 'equalto', 'Выключатель отключен') | first %}
-                    {% if switch_off %}
-                        {% set switch_off_norm = (switch_off.value == switch_off.display_state) %}
-                        {% set switch_off_val = '1' if switch_off_norm else '0' %}
-                    {% else %}
-                        {% set switch_off_val = '0' %}
-                    {% endif %}
-
+                    {# --- Тележка в рабочем положении (для новых типов — определяет среднюю картинку) --- #}
                     {% set cart_position = params | selectattr('parameter_description', 'equalto', 'Тележка в рабочем положении') | first %}
-                    {% if cart_position %}
-                        {% set cart_position_norm = (cart_position.value == cart_position.display_state) %}
-                        {% set cart_position_val = '1' if cart_position_norm else '0' %}
-                    {% else %}
-                        {% set cart_position_val = '0' %}
-                    {% endif %}
+                    {% set cart_in_work = true if (cart_position and cart_position.value) else false %}
 
-                    <img class="image"
-                         src="{{ url_for('static', filename='images/' ~ switch_on_val ~ switch_off_val ~ 'n' ~ cart_position_val ~ 'n.png') }}"
-                         alt="Cart Image">
+                    {% if ct == 'ОЛ' %}
 
-                    <!-- 5. Картинка заземляющих ножей -->
-                    {% set grounding_knives = params | selectattr('parameter_description', 'equalto', 'Включены заземляющие ножи') | first %}
-                    {% if grounding_knives %}
-                        {% set gk_norm = (grounding_knives.value == grounding_knives.display_state) %}
-                        {% if gk_norm %}
-                            <img class="image" src="{{ url_for('static', filename='images/nn1nn.png') }}" alt="Grounding Image">
-                        {% else %}
-                            <img class="image" src="{{ url_for('static', filename='images/nn0nn.png') }}" alt="Grounding Image">
+                        <!-- 3. Ключ управления местное (как было) -->
+                        {% set local_control = params | selectattr('parameter_description', 'equalto', 'Ключ управления местное') | first %}
+                        {% if local_control %}
+                            {% set local_norm = (local_control.value == local_control.display_state) %}
+                            {% if local_norm %}
+                                <img class="image" src="{{ url_for('static', filename='images/nnnn1.png') }}" alt="Key Image">
+                            {% else %}
+                                <img class="image" src="{{ url_for('static', filename='images/nnnn0.png') }}" alt="Key Image">
+                            {% endif %}
                         {% endif %}
+
+                        <!-- 4. Картинка тележки (как было) -->
+                        {% set switch_on = params | selectattr('parameter_description', 'equalto', 'Выключатель включен') | first %}
+                        {% if switch_on %}
+                            {% set switch_on_norm = (switch_on.value == switch_on.display_state) %}
+                            {% set switch_on_val = '1' if switch_on_norm else '0' %}
+                        {% else %}
+                            {% set switch_on_val = '0' %}
+                        {% endif %}
+
+                        {% set switch_off = params | selectattr('parameter_description', 'equalto', 'Выключатель отключен') | first %}
+                        {% if switch_off %}
+                            {% set switch_off_norm = (switch_off.value == switch_off.display_state) %}
+                            {% set switch_off_val = '1' if switch_off_norm else '0' %}
+                        {% else %}
+                            {% set switch_off_val = '0' %}
+                        {% endif %}
+
+                        {% if cart_position %}
+                            {% set cart_position_norm = (cart_position.value == cart_position.display_state) %}
+                            {% set cart_position_val = '1' if cart_position_norm else '0' %}
+                        {% else %}
+                            {% set cart_position_val = '0' %}
+                        {% endif %}
+
+                        <img class="image"
+                             src="{{ url_for('static', filename='images/' ~ switch_on_val ~ switch_off_val ~ 'n' ~ cart_position_val ~ 'n.png') }}"
+                             alt="Cart Image">
+
+                        <!-- 5. Картинка заземляющих ножей (как было) -->
+                        {% set grounding_knives = params | selectattr('parameter_description', 'equalto', 'Включены заземляющие ножи') | first %}
+                        {% if grounding_knives %}
+                            {% set gk_norm = (grounding_knives.value == grounding_knives.display_state) %}
+                            {% if gk_norm %}
+                                <img class="image" src="{{ url_for('static', filename='images/nn1nn.png') }}" alt="Grounding Image">
+                            {% else %}
+                                <img class="image" src="{{ url_for('static', filename='images/nn0nn.png') }}" alt="Grounding Image">
+                            {% endif %}
+                        {% endif %}
+
+                    {% else %}
+
+                        <!-- НОВЫЕ ТИПЫ: СР / ТН / ТСН -->
+                        <!-- Верхняя картинка всегда nnnn0.png -->
+                        <img class="image" src="{{ url_for('static', filename='images/nnnn0.png') }}" alt="Top">
+
+                        <!-- Средняя картинка зависит от "Тележка в рабочем положении" -->
+                        {% if ct == 'СР' %}
+                            <img class="image" src="{{ url_for('static', filename='images/' ~ ('SR1.png' if cart_in_work else 'SR0.png')) }}" alt="SR">
+                        {% elif ct == 'ТН' %}
+                            <img class="image" src="{{ url_for('static', filename='images/' ~ ('TN1.png' if cart_in_work else 'TN0.png')) }}" alt="TN">
+                        {% elif ct == 'ТСН' %}
+                            <img class="image" src="{{ url_for('static', filename='images/' ~ ('TSN1.png' if cart_in_work else 'TSN0.png')) }}" alt="TSN">
+                        {% endif %}
+
+                        <!-- Нижняя -->
+                        {% if ct == 'ТСН' %}
+                            <img class="image" src="{{ url_for('static', filename='images/TSN_D.png') }}" alt="TSN_D">
+                        {% else %}
+                            {% set grounding_knives = params | selectattr('parameter_description', 'equalto', 'Включены заземляющие ножи') | first %}
+                            {% if grounding_knives %}
+                                {% set gk_norm = (grounding_knives.value == grounding_knives.display_state) %}
+                                {% if gk_norm %}
+                                    <img class="image" src="{{ url_for('static', filename='images/nn1nn.png') }}" alt="Grounding Image">
+                                {% else %}
+                                    <img class="image" src="{{ url_for('static', filename='images/nn0nn.png') }}" alt="Grounding Image">
+                                {% endif %}
+                            {% endif %}
+                        {% endif %}
+
                     {% endif %}
+
+
 
                     <!-- 6. Дата "Выключатель включен", если старше 5 минут -->
                     {% if switch_on and switch_on.value_date %}

@@ -13,6 +13,7 @@ class HVCell(Base):
     id = Column(Integer, primary_key=True)
     cell_number = Column(Integer)
     cell_name = Column(String(64))
+    cell_type = Column(String(16))
     unit_id = Column(Integer)
     coil_register = Column(Integer)
     mqtt_channel = Column(String(64))

@@ -6,6 +6,10 @@ from datetime import datetime, timedelta
 from .database import db_session
 from .models import HVCell, AskueData
 
+from flask import current_app, jsonify
+from .web_key import get_web_key_daily
+
+
 main = Blueprint('main', __name__)
 
 @main.route('/')
@@ -34,12 +38,11 @@ def index():
 from flask import current_app, jsonify
 import secrets
 
+@main.route('/api/web_key', methods=['GET'])
+def api_web_key():
+    return jsonify({"key": get_web_key_daily(current_app.config)})
+
 @main.route('/api/new_key', methods=['GET'])
 def generate_new_key():
-    """
-    Генерирует новый случайный ключ и записывает его в конфиг приложения.
-    Возвращает JSON: {"key": "..."}.
-    """
-    new_key = secrets.token_urlsafe(16)
-    current_app.config['CURRENT_KEY'] = new_key
-    return jsonify({"key": new_key})
+    # совместимость со старым sync-модулем
+    return jsonify({"key": get_web_key_daily(current_app.config)})
