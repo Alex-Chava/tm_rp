@@ -5,8 +5,10 @@
 cp config.json config.json.backup
 cp database.db database.db.backup
 
-# Выполнить pull
-git pull origin master
+# Выполнить обновление
+git checkout master
+git fetch origin
+git reset --hard origin/master
 
 # Восстановить свои версии файлов
 cp config.json.backup config.json
