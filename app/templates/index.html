@@ -27,7 +27,7 @@
 
                     {# --- Тележка в рабочем положении (для новых типов — определяет среднюю картинку) --- #}
                     {% set cart_position = params | selectattr('parameter_description', 'equalto', 'Тележка в рабочем положении') | first %}
-                    {% set cart_in_work = true if (cart_position and cart_position.value) else false %}
+                    {% set cart_in_work = (cart_position is not none) and (cart_position.value == cart_position.display_state) %}
 
                     {% if ct == 'ОЛ' %}
 
