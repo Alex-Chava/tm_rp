@@ -34,6 +34,7 @@ MQTT_QOS = 1  # Добавляем QoS для надежности
 MQTT_KEEPALIVE = 60
 TELEGRAM_TOKEN = "7276598964:AAG3mw9i7Ybt2PSyYBpwhElGU9F3IC7ZF2s"
 TELEGRAM_CHAT_ID = "-4650871809"
+TELEGRAM_URL = "https://api.telegram.org"
 DEVICE_NAME = "SIM-TM"
 DEVICE_SERIAL = "300000000200"
 DEVICE_FW = "v25.0.0"
@@ -72,9 +73,19 @@ current_web_key = None
 current_web_key_date = None  # date()
 
 # Очередь для Telegram (чтобы не блокировать основной цикл)
-tg_queue = Queue(maxsize=500)
+TG_QUEUE_MAX = 2000
+tg_queue = Queue(maxsize=TG_QUEUE_MAX)
+
 tg_worker_thread = None
 
+# очередь для mqtt
+MQTT_QUEUE_MAX = 5000  # сколько сообщений держим максимум
+mqtt_message_queue = Queue(maxsize=MQTT_QUEUE_MAX)
+
+mqtt_loop_started = False
+
+FULL_STATE_ON_LINK_CHANGE_COOLDOWN_SEC = 30
+last_full_state_link_change_send = None  # datetime
 
 
 #####################################################
@@ -89,7 +100,7 @@ def load_config_from_json(file_path):
         with open(file_path, 'r') as f:
             config = json.load(f)
 
-        global SERIAL_BAUDRATE, MQTT_BROKER, MQTT_PORT, MQTT_TOPIC, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID
+        global SERIAL_BAUDRATE, MQTT_BROKER, MQTT_PORT, MQTT_TOPIC, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_URL
         global DEVICE_NAME, DEVICE_SERIAL, DEVICE_FW, DEVICE_TYPE, POLL_INTERVAL_SEC
         global MIN_DB_WRITE_INTERVAL_SEC, NO_RESPONSE_THRESHOLD_SEC, TELEGRAM_HEADER, FLASK_HOST, FLASK_PORT
         global FULL_STATE_INTERVAL_SEC
@@ -101,6 +112,7 @@ def load_config_from_json(file_path):
         MQTT_TOPIC = config.get("MQTT_TOPIC", MQTT_TOPIC)
         TELEGRAM_TOKEN = config.get("TELEGRAM_TOKEN", TELEGRAM_TOKEN)
         TELEGRAM_CHAT_ID = config.get("TELEGRAM_CHAT_ID", TELEGRAM_CHAT_ID)
+        TELEGRAM_URL = config.get("TELEGRAM_URL", TELEGRAM_URL)
         DEVICE_NAME = config.get("DEVICE_NAME", DEVICE_NAME)
         DEVICE_SERIAL = config.get("DEVICE_SERIAL", DEVICE_SERIAL)
         DEVICE_FW = config.get("DEVICE_FW", DEVICE_FW)
@@ -182,6 +194,46 @@ print(f"[INFO] SERIAL_PORT установлен в {SERIAL_PORT}")
 
 # Загрузка конфигурации из JSON файла
 load_config_from_json("config.json")
+
+def mqtt_queue_put(payload: dict) -> bool:
+    """
+    Положить сообщение в MQTT-очередь.
+    Если очередь заполнена — выкидываем самое старое и кладём новое.
+    Возвращает True если положили.
+    """
+    try:
+        mqtt_message_queue.put_nowait(payload)
+        return True
+    except Full:
+        try:
+            _ = mqtt_message_queue.get_nowait()  # выкинули самое старое
+        except Empty:
+            pass
+        try:
+            mqtt_message_queue.put_nowait(payload)
+            return True
+        except Full:
+            return False
+
+def send_full_state_on_link_change(is_event: bool):
+    """
+    Отправляет полный снимок при изменении связи (отвал/восстановление),
+    но не чаще cooldown.
+    """
+    global last_full_state_link_change_send
+    now = datetime.now()
+
+    if last_full_state_link_change_send is not None:
+        if (now - last_full_state_link_change_send).total_seconds() < FULL_STATE_ON_LINK_CHANGE_COOLDOWN_SEC:
+            print("[INFO] full_state on link-change skipped (cooldown)")
+            return False
+
+    send_full_state_to_mqtt(is_event=is_event)
+    # (по желанию) сразу же догоняем ASKUE
+    send_askue_snapshot_to_mqtt()
+
+    last_full_state_link_change_send = now
+    return True
 
 
 #####################################################
@@ -290,11 +342,7 @@ def initialize_mqtt_client():
 
 
 def try_connect_mqtt():
-    """
-    Пытается подключиться к MQTT с обработкой ошибок и повторными попытками.
-    Возвращает (mqtt_client, success_flag)
-    """
-    global mqtt_client, is_mqtt_connected, mqtt_reconnect_attempts
+    global mqtt_client, is_mqtt_connected, mqtt_reconnect_attempts, mqtt_loop_started
 
     if mqtt_client is None:
         mqtt_client = initialize_mqtt_client()
@@ -304,16 +352,18 @@ def try_connect_mqtt():
     try:
         print(f"[MQTT] Подключение к {MQTT_BROKER}:{MQTT_PORT}...")
         mqtt_client.connect(MQTT_BROKER, MQTT_PORT, MQTT_KEEPALIVE)
-        mqtt_client.loop_start()  # Запускаем фоновый цикл для обработки сообщений
-        time.sleep(1)  # Даем время для установления соединения
+
+        if not mqtt_loop_started:
+            mqtt_client.loop_start()
+            mqtt_loop_started = True
+
+        time.sleep(1)
 
         if is_mqtt_connected:
-            print(f"[MQTT] Успешно подключен к {MQTT_BROKER}:{MQTT_PORT}")
             mqtt_reconnect_attempts = 0
             return (mqtt_client, True)
         else:
             mqtt_reconnect_attempts += 1
-            print(f"[MQTT] Попытка подключения {mqtt_reconnect_attempts} не удалась")
             return (mqtt_client, False)
 
     except Exception as e:
@@ -366,31 +416,24 @@ def send_mqtt_message(payload: dict) -> bool:
         is_mqtt_connected = False
         return False
 
-def queue_mqtt_message(payload: dict):
+def queue_mqtt_message(payload: dict) -> bool:
     """
-    Добавляет сообщение в очередь для отправки.
-    Если MQTT подключен - отправляет сразу.
-    Если нет - сохраняет в очередь.
+    Всегда стараемся НЕ терять сообщение:
+    - если MQTT подключён -> пробуем отправить
+    - если не получилось / не подключён -> кладём в очередь (с лимитом)
     """
-    global mqtt_message_queue
+    global is_mqtt_connected
 
-    print(f"[DEBUG] queue_mqtt_message вызвана, is_mqtt_connected={is_mqtt_connected}")
-
-    # Если подключены, пытаемся отправить сразу
     if is_mqtt_connected:
-        print("[DEBUG] MQTT подключен, пытаемся отправить сразу")
         if send_mqtt_message(payload):
             return True
-        else:
-            # Если отправка не удалась, добавляем в очередь
-            mqtt_message_queue.put(payload)
-            print(f"[MQTT] Сообщение добавлено в очередь (размер очереди: {mqtt_message_queue.qsize()})")
-            return False
+
+    ok = mqtt_queue_put(payload)
+    if ok:
+        print(f"[MQTT] Сообщение в очереди (size={mqtt_message_queue.qsize()}/{MQTT_QUEUE_MAX})")
     else:
-        # Если не подключены, просто добавляем в очередь
-        mqtt_message_queue.put(payload)
-        print(f"[MQTT] Сообщение добавлено в очередь (размер очереди: {mqtt_message_queue.qsize()})")
-        return False
+        print("[MQTT][ERROR] Очередь переполнена и не удалось положить сообщение (даже после дропа)")
+    return False
 
 def process_mqtt_queue():
     """
@@ -418,7 +461,7 @@ def process_mqtt_queue():
 
     # Возвращаем неотправленные сообщения обратно в основную очередь
     while not temp_queue.empty():
-        mqtt_message_queue.put(temp_queue.get())
+        mqtt_queue_put(temp_queue.get())
 
     if sent_count > 0:
         print(f"[MQTT] Успешно отправлено {sent_count} сообщений из очереди")
@@ -454,76 +497,89 @@ def check_and_reconnect_mqtt_if_needed():
 def send_initial_state_to_mqtt():
     """
     Отправляет полное состояние всех контролируемых устройств из базы данных при старте программы.
+    ts ставим НЕ общий на пакет, а по каждому unit_id: MAX(value_date) по тегам устройства.
     """
     print("[INFO] Отправка начального состояния всех устройств...")
 
     s = SessionLocal()
     try:
-        # Получаем все ячейки для текущей стороны
         hv_cells = s.query(HVCell).filter(HVCell.side == DEVICE_SIDE).all()
 
         if not hv_cells:
             print("[INFO] Нет устройств для отправки начального состояния")
             return
 
-        # Группируем по unit_id
-        devices_state = defaultdict(list)
+        devices_state = defaultdict(list)  # unit_id -> tags[]
+        devices_ts = {}                    # unit_id -> max(value_date)
 
         for cell in hv_cells:
+            # собираем tags
             if cell.value is not None:
                 devices_state[cell.unit_id].append({
-                    "tag": cell.mqtt_channel,  # Ключ "tag" вместо "channel_name"
+                    "tag": cell.mqtt_channel,
                     "val": bool(cell.value)
                 })
 
-        # Формируем payload для каждого устройства
+            # max(value_date) по устройству
+            if cell.value_date is not None:
+                prev = devices_ts.get(cell.unit_id)
+                if prev is None or cell.value_date > prev:
+                    devices_ts[cell.unit_id] = cell.value_date
+
         devices_list = []
-        timestamp_str = datetime.now().strftime("%Y-%m-%dT%H:%M:%S%z")
 
         for unit_id, tags in devices_state.items():
-            if tags:  # Если есть данные для этого устройства
-                dev_payload = {
-                    "id": unit_id,
-                    "type": DEVICE_TYPE,
-                    "serial": unit_id,
-                    "vals": [{
-                        "ts": timestamp_str,
-                        "diff": 0,
-                        "tags": tags
-                    }]
-                }
-                devices_list.append(dev_payload)
+            if not tags:
+                continue
 
-        if devices_list:
-            final_payload = {
-                "name": DEVICE_NAME,
-                "serial": DEVICE_SERIAL,
-                "fw": DEVICE_FW,
-                "is_event": True,
-                "measures": [{
-                    "measure": "mDIn",
-                    "devices": devices_list
-                }]
-            }
-
-            # Отправляем начальное состояние
-            success = queue_mqtt_message(final_payload)
-            if success:
-                print(f"[INFO] Отправлено начальное состояние для {len(devices_list)} устройств")
+            dt = devices_ts.get(unit_id)
+            if dt is not None:
+                try:
+                    ts = dt.astimezone().isoformat(timespec="seconds")
+                except Exception:
+                    ts = datetime.now().astimezone().isoformat(timespec="seconds")
             else:
-                print(f"[INFO] Начальное состояние добавлено в очередь для {len(devices_list)} устройств")
-        else:
+                ts = datetime.now().astimezone().isoformat(timespec="seconds")
+
+            devices_list.append({
+                "id": unit_id,
+                "type": DEVICE_TYPE,
+                "serial": unit_id,
+                "vals": [{
+                    "ts": ts,
+                    "diff": 0,
+                    "tags": tags
+                }]
+            })
+
+        if not devices_list:
             print("[INFO] Нет данных для отправки начального состояния")
+            return
+
+        final_payload = {
+            "name": DEVICE_NAME,
+            "serial": DEVICE_SERIAL,
+            "fw": DEVICE_FW,
+            "is_event": True,  # как было у тебя
+            "measures": [{
+                "measure": "mDIn",
+                "devices": devices_list
+            }]
+        }
+
+        success = queue_mqtt_message(final_payload)
+        if success:
+            print(f"[INFO] Отправлено начальное состояние для {len(devices_list)} устройств")
+        else:
+            print(f"[INFO] Начальное состояние добавлено в очередь для {len(devices_list)} устройств")
 
     except Exception as e:
         print(f"[ERROR] Ошибка при отправке начального состояния: {e}")
     finally:
         s.close()
+
+
 def send_full_state_to_mqtt(is_event: bool = False):
-    """
-    Отправляет полное состояние всех тегов из БД в MQTT.
-    is_event=False для периодических снимков.
-    """
     print("[INFO] Отправка полного состояния всех устройств...")
 
     s = SessionLocal()
@@ -534,31 +590,48 @@ def send_full_state_to_mqtt(is_event: bool = False):
             return
 
         devices_state = defaultdict(list)
+        devices_ts = {}  # unit_id -> datetime (max value_date)
 
         for cell in hv_cells:
-            # отправляем даже None? обычно нет смысла — оставим как было: только если есть значение
             if cell.value is not None:
                 devices_state[cell.unit_id].append({
                     "tag": cell.mqtt_channel,
                     "val": bool(cell.value)
                 })
 
+            # собираем max(value_date) на устройство
+            if cell.value_date is not None:
+                prev = devices_ts.get(cell.unit_id)
+                if prev is None or cell.value_date > prev:
+                    devices_ts[cell.unit_id] = cell.value_date
+
         devices_list = []
-        timestamp_str = datetime.now().astimezone().isoformat(timespec="seconds")
 
         for unit_id, tags in devices_state.items():
-            if tags:
-                dev_payload = {
-                    "id": unit_id,
-                    "type": DEVICE_TYPE,
-                    "serial": unit_id,
-                    "vals": [{
-                        "ts": timestamp_str,
-                        "diff": 0,
-                        "tags": tags
-                    }]
-                }
-                devices_list.append(dev_payload)
+            if not tags:
+                continue
+
+            # ts устройства = max(value_date) по его тегам, иначе fallback "сейчас"
+            dt = devices_ts.get(unit_id)
+            if dt is not None:
+                try:
+                    ts = dt.astimezone().isoformat(timespec="seconds")
+                except Exception:
+                    ts = datetime.now().astimezone().isoformat(timespec="seconds")
+            else:
+                ts = datetime.now().astimezone().isoformat(timespec="seconds")
+
+            dev_payload = {
+                "id": unit_id,
+                "type": DEVICE_TYPE,
+                "serial": unit_id,
+                "vals": [{
+                    "ts": ts,
+                    "diff": 0,
+                    "tags": tags
+                }]
+            }
+            devices_list.append(dev_payload)
 
         if not devices_list:
             print("[INFO] Нет данных для отправки полного состояния")
@@ -585,6 +658,8 @@ def send_full_state_to_mqtt(is_event: bool = False):
         print(f"[ERROR] Ошибка при отправке полного состояния: {e}")
     finally:
         s.close()
+
+
 def send_askue_snapshot_to_mqtt():
     """
     Отправляет в MQTT один "снимок" всех доступных AskueData.
@@ -743,7 +818,6 @@ def send_modbus_request(ser: serial.Serial, request: bytes) -> bytes:
     response = ser.read(256)
     return response
 
-
 def parse_multiple_coils(response: bytes, quantity: int):
     """Парсим ответ при чтении coils (function=1). Возвращаем список [0/1,...] длиной quantity или None."""
     if len(response) < 5:
@@ -768,38 +842,34 @@ def parse_multiple_coils(response: bytes, quantity: int):
         coil_vals.append(val)
     return coil_vals
 
-
-# def send_telegram_message(text: str):
-#     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-#     data = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML"}
-#     try:
-#         r = requests.post(url, data=data)
-#         if r.status_code == 200:
-#             print(f"[TG] Sent: {text}")
-#         else:
-#             print(f"[TG] Error {r.status_code}: {r.text}")
-#     except Exception as e:
-#         print(f"[TG] Exception: {e}")
-
-def send_telegram_message_async(text: str):
-    """
-    Не блокирует основной поток: кладём сообщение в очередь.
-    Если очередь переполнена — молча дропаем (или можно логировать).
-    """
+def tg_queue_put(text: str) -> bool:
+    """Положить в очередь TG, если переполнена — дропнуть самое старое."""
     try:
         tg_queue.put_nowait(text)
         return True
     except Full:
-        print("[TG] Очередь переполнена, сообщение отброшено")
-        return False
+        try:
+            _ = tg_queue.get_nowait()
+        except Empty:
+            pass
+        try:
+            tg_queue.put_nowait(text)
+            return True
+        except Full:
+            return False
 
+def send_telegram_message_async(text: str):
+    ok = tg_queue_put(text)
+    if ok:
+        print(f"[TG] queued (size={tg_queue.qsize()}/{TG_QUEUE_MAX})")
+    else:
+        print("[TG][ERROR] queue overflow: drop")
+    return ok
 
 def telegram_worker():
-    """
-    Фоновый поток, который реально отправляет сообщения в Telegram.
-    С таймаутами и ретраями.
-    """
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    url = f"{TELEGRAM_URL}/bot{TELEGRAM_TOKEN}/sendMessage"
+
+    fail_streak = 0
 
     while True:
         try:
@@ -810,27 +880,37 @@ def telegram_worker():
         data = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML"}
 
         ok = False
+        last_err = None
+
         for attempt in range(3):
             try:
-                # ВАЖНО: timeout обязателен
-                r = requests.post(url, data=data, timeout=(3, 7))  # connect=3s, read=7s
+                r = requests.post(url, data=data, timeout=(3, 10))
                 if r.status_code == 200:
                     ok = True
                     break
                 else:
-                    print(f"[TG] Error {r.status_code}: {r.text}")
+                    last_err = f"HTTP {r.status_code}: {r.text[:120]}"
             except Exception as e:
-                print(f"[TG] Exception: {e}")
+                last_err = str(e)
 
-            time.sleep(2)  # небольшая пауза перед повтором
+            time.sleep(2)
 
         if ok:
-            print(f"[TG] Sent: {text[:80]}...")
-        else:
-            print("[TG] Failed after retries")
+            fail_streak = 0
+            print(f"[TG] Sent (queue={tg_queue.qsize()}/{TG_QUEUE_MAX}) : {text[:80]}...")
+            tg_queue.task_done()
+            continue
 
+        # НЕ УДАЛОСЬ: возвращаем обратно в очередь
+        fail_streak += 1
         tg_queue.task_done()
 
+        requeued = tg_queue_put(text)
+        print(f"[TG] Failed, requeue={requeued}, streak={fail_streak}, err={last_err}")
+
+        # backoff чтобы не молотить сеть
+        sleep_sec = min(60, 5 * fail_streak)  # 5,10,15.. до 60
+        time.sleep(sleep_sec)
 
 def send_telegram_error_once_in_period(error_text, last_send_time, period_sec=3600):
     """
@@ -842,7 +922,6 @@ def send_telegram_error_once_in_period(error_text, last_send_time, period_sec=36
         send_telegram_message_async(error_text)
         return now
     return last_send_time  # если не отправили, возвращаем старое время
-
 
 def open_serial_port_with_retries():
     """
@@ -875,7 +954,6 @@ def open_serial_port_with_retries():
             )
             # Ждём минуту и повторяем
             time.sleep(60)
-
 
 # Помощники для работы с БД
 def update_db_value(cell_id: int, new_val: bool):
@@ -977,7 +1055,7 @@ send_initial_telegram_message()
 print("[INFO] Старт опроса...")
 
 last_mqtt_queue_check = datetime.now()
-MQTT_QUEUE_CHECK_INTERVAL = 60  # Проверять очередь раз в минуту
+MQTT_QUEUE_CHECK_INTERVAL = 10  # Проверять очередь раз в минуту
 
 last_full_state_send = datetime.now()
 # FULL_STATE_INTERVAL_SEC = 3600  # раз в час
@@ -1032,11 +1110,16 @@ while True:
             if last_ok is not None:
                 delta_sec = (datetime.now() - last_ok).total_seconds()
                 print(f"[DEBUG] Последний успешный опрос был {delta_sec:.1f} сек назад.")
+
                 if delta_sec > NO_RESPONSE_THRESHOLD_SEC and not alert_sent[uid]:
                     msg = (f"Нет ответа от устройства unit_id={uid} >5мин "
                            f"(последний успешный опрос: {last_ok.strftime('%H:%M:%S')}).")
                     print(f"[DEBUG] Отправляем тревогу в телеграм: {msg}")
                     send_telegram_message_async(msg)
+
+                    # MQTT: отправляем ПОЛНЫЙ снимок ВСЕХ устройств как событие
+                    send_full_state_on_link_change(is_event=True)
+
                     alert_sent[uid] = True
             else:
                 print(f"[DEBUG] Первая попытка — не отправляем тревогу.")
@@ -1046,6 +1129,10 @@ while True:
             last_success_device[uid] = now_success
             if alert_sent[uid]:
                 print(f"[INFO] Устройство unit_id={uid} восстановило связь.")
+
+                # MQTT: отправляем ПОЛНЫЙ снимок ВСЕХ устройств как обычный снимок
+                send_full_state_on_link_change(is_event=False)
+
                 alert_sent[uid] = False
 
             coil_map = {}
