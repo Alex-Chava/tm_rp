@@ -544,7 +544,7 @@ def send_initial_state_to_mqtt():
             devices_list.append({
                 "id": unit_id,
                 "type": DEVICE_TYPE,
-                "serial": unit_id,
+                "serial": f"{DEVICE_SIDE}_{unit_id}",
                 "vals": [{
                     "ts": ts,
                     "diff": 0,
@@ -624,7 +624,7 @@ def send_full_state_to_mqtt(is_event: bool = False):
             dev_payload = {
                 "id": unit_id,
                 "type": DEVICE_TYPE,
-                "serial": unit_id,
+                "serial": f"{DEVICE_SIDE}_{unit_id}",
                 "vals": [{
                     "ts": ts,
                     "diff": 0,
@@ -1192,7 +1192,7 @@ while True:
             dev_payload = {
                 "id": uid2,
                 "type": DEVICE_TYPE,
-                "serial": uid2,
+                "serial": f"{DEVICE_SIDE}_{uid2}",
                 "vals": [{
                     "ts": timestamp_str,
                     "diff": 0,
