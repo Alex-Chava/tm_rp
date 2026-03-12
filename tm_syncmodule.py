@@ -87,6 +87,8 @@ mqtt_loop_started = False
 FULL_STATE_ON_LINK_CHANGE_COOLDOWN_SEC = 30
 last_full_state_link_change_send = None  # datetime
 
+POST_EVENT_FULL_STATE_COOLDOWN_SEC = 10  # сколько минимум секунд между "event -> full snapshot"
+last_post_event_full_state_send = None   # datetime
 
 #####################################################
 # ФУНКЦИЯ: Загрузка конфигурации из JSON файла
@@ -235,6 +237,24 @@ def send_full_state_on_link_change(is_event: bool):
     last_full_state_link_change_send = now
     return True
 
+def send_full_state_after_event():
+    """
+    После любого события (is_event=True) досылаем полный текущий снимок (is_event=False)
+    ВАЖНО: не трогаем last_full_state_send (периодический таймер).
+    Чтобы не заспамить, есть cooldown.
+    """
+    global last_post_event_full_state_send
+    now = datetime.now()
+
+    if last_post_event_full_state_send is not None:
+        if (now - last_post_event_full_state_send).total_seconds() < POST_EVENT_FULL_STATE_COOLDOWN_SEC:
+            print("[INFO] post-event full_state skipped (cooldown)")
+            return False
+
+    send_full_state_to_mqtt(is_event=False)
+
+    last_post_event_full_state_send = now
+    return True
 
 #####################################################
 # ФУНКЦИЯ: получаем новый ключ из Flask
@@ -1216,6 +1236,9 @@ while True:
         mqtt_success = queue_mqtt_message(final_payload)
         if not mqtt_success and not is_mqtt_connected:
             print(f"[WARN] MQTT не подключен, сообщение добавлено в очередь ({mqtt_message_queue.qsize()} в очереди)")
+
+        # После event-сообщения — внеочередной полный снимок текущего состояния
+        send_full_state_after_event()
 
         # Дополнительно шлём ПКЭ/АСКУЭ в MQTT (в телегу не дублируем)
         send_askue_snapshot_to_mqtt()
